@@ -41,8 +41,10 @@ abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMActi
 
     init {
         action.onEach {
-            val newState = handleAction(it, state.value)
-            setState(newState)
+            viewModelScope.launch {
+                val newState = handleAction(it, state.value)
+                setState(newState)
+            }
         }.launchIn(viewModelScope)
     }
 

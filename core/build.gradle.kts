@@ -40,6 +40,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     testImplementation(libs.junit)
+    testImplementation(libs.kotlin.coroutine.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     implementation(libs.androidx.lifecycle.runtime.ktx)

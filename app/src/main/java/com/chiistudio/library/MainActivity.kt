@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
 class MainActivity : AppCompatActivity() {
     val flow = MutableSharedFlow<Int>(
@@ -25,9 +26,12 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         var i = 0
         flow.onEach {
-            Log.e("LOAN", "collecting $it")
-            delay(2000)
-            Log.e("LOAN", "collected $it")
+            lifecycleScope.launch {
+                val random = Random.nextInt(1000, 2000)
+                Log.e("LOAN", "collecting $it delay=$random")
+                delay(random.toLong())
+                Log.e("LOAN", "collected $it delay=$random")
+            }
         }.launchIn(lifecycleScope)
         for (i in 0 until 6) {
             lifecycleScope.launch {

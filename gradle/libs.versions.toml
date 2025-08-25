@@ -16,6 +16,7 @@ videogl = "1.0.1"
 
 pluginPublish = "1.0.0"
 activity = "1.10.1"
+coroutineTest = "1.8.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -34,6 +35,7 @@ androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-toolin
 androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-activity = { group = "androidx.activity", name = "activity", version.ref = "activity" }
+kotlin-coroutine-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutineTest" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
