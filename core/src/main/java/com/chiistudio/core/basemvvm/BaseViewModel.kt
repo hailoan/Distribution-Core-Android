@@ -37,20 +37,31 @@ abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMActi
     )
     val effect = _effect.asSharedFlow()
 
-    abstract fun handleAction(action: A, state: S): S
+    abstract fun handleAction(action: A, state: S, emitState: ((S) -> S) -> Unit)
 
     init {
         action.onEach {
             viewModelScope.launch {
-                val newState = handleAction(it, state.value)
-                setState(newState)
+                handleAction(
+                    action = it,
+                    state = state.value,
+                    emitState = { transform ->
+                        viewModelScope.launch {
+                            val newState = transform.invoke(state.value)
+                            updateStateAsync {
+                                newState
+                            }
+                        }
+                    })
             }
         }.launchIn(viewModelScope)
     }
 
     protected fun setState(state: S) {
         viewModelScope.launch {
-            _state.emit(state)
+            updateStateAsync {
+                state
+            }
         }
     }
 
@@ -70,7 +81,7 @@ abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMActi
         block: suspend S.() -> Unit
     ) = reentrantMutexState.withReentrantLock { block(state.value) }
 
-    suspend fun setState(
+    suspend fun updateStateAsync(
         transform: suspend S.() -> S
     ) = reentrantMutexState.withReentrantLock { _state.update { transform(it) } }
 }
