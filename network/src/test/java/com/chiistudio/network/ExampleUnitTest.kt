@@ -1,4 +1,4 @@
-package com.chiistudio.core
+package com.chiistudio.network
 
 import org.junit.Test
 

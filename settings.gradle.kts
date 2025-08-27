@@ -73,3 +73,4 @@ listModule.forEach {
 }
 include(":plugin")
 include(":core")
+include(":network")
