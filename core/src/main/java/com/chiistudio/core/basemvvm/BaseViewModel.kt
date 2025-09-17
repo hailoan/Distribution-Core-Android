@@ -3,6 +3,8 @@ package com.chiistudio.core.basemvvm
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -10,14 +12,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 
-abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMAction, E : BaseViewModel.VMEffect> :
+abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMAction, M : BaseViewModel.VMMutation, E : BaseViewModel.VMEffect> :
     ViewModel() {
     interface VMState
     interface VMAction
+    interface VMMutation
     interface VMEffect
 
     abstract var initState: S
@@ -29,39 +33,33 @@ abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMActi
     val action: SharedFlow<A> = _action
     private val _state: MutableStateFlow<S> by lazy { MutableStateFlow(initState) }
     val state: StateFlow<S> by lazy { _state.asStateFlow() }
-
-    private val reentrantMutexState = ReentrantMutex()
+    private val _mutation by lazy { Channel<M>() }
+    val mutation: Flow<M> = _mutation.receiveAsFlow()
 
     private val _effect: MutableSharedFlow<E> = MutableSharedFlow(
         0, 1, BufferOverflow.DROP_OLDEST
     )
     val effect = _effect.asSharedFlow()
 
-    abstract fun handleAction(action: A, state: S, emitState: ((S) -> S) -> Unit)
+
+    abstract fun handleAction(action: A, state: S)
+
+    abstract suspend fun handleMutation(mutation: M, state: S): S
 
     init {
         action.onEach {
-            viewModelScope.launch {
-                handleAction(
-                    action = it,
-                    state = state.value,
-                    emitState = { transform ->
-                        viewModelScope.launch {
-                            val newState = transform.invoke(state.value)
-                            updateStateAsync {
-                                newState
-                            }
-                        }
-                    })
-            }
+            handleAction(it, state.value)
+        }.launchIn(viewModelScope)
+        mutation.map {
+            handleMutation(mutation = it, state = state.value)
+        }.onEach {
+            setState(it)
         }.launchIn(viewModelScope)
     }
 
     protected fun setState(state: S) {
         viewModelScope.launch {
-            updateStateAsync {
-                state
-            }
+            _state.emit(state)
         }
     }
 
@@ -77,11 +75,9 @@ abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMActi
         }
     }
 
-    suspend fun withState(
-        block: suspend S.() -> Unit
-    ) = reentrantMutexState.withReentrantLock { block(state.value) }
-
-    suspend fun updateStateAsync(
-        transform: suspend S.() -> S
-    ) = reentrantMutexState.withReentrantLock { _state.update { transform(it) } }
+    fun sendMutation(mutation: M) {
+        viewModelScope.launch {
+            _mutation.send(mutation)
+        }
+    }
 }
