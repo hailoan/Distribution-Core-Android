@@ -84,7 +84,7 @@ import kotlinx.coroutines.launch
  * @param M Type representing state mutations
  * @param E Type representing one-time side effects
  */
-abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMAction, M : BaseViewModel.VMMutation, E : BaseViewModel.VMEffect> :
+abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMAction, E : BaseViewModel.VMEffect> :
     ViewModel() {
     interface VMState
     interface VMAction
@@ -100,8 +100,8 @@ abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMActi
     val action: SharedFlow<A> = _action
     private val _state: MutableStateFlow<S> by lazy { MutableStateFlow(initState) }
     val state: StateFlow<S> by lazy { _state.asStateFlow() }
-    private val _mutation by lazy { Channel<M>() }
-    val mutation: Flow<M> = _mutation.receiveAsFlow()
+    private val _mutation by lazy { Channel<VMMutation>() }
+    val mutation: Flow<VMMutation> = _mutation.receiveAsFlow()
 
     private val _effect: MutableSharedFlow<E> = MutableSharedFlow(
         0, 1, BufferOverflow.DROP_OLDEST
@@ -111,7 +111,9 @@ abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMActi
 
     abstract fun handleAction(action: A, state: S)
 
-    abstract suspend fun handleMutation(mutation: M, state: S): S
+    open suspend fun handleMutation(mutation: VMMutation, state: S): S {
+        return state
+    }
 
     init {
         action.onEach {
@@ -142,7 +144,7 @@ abstract class BaseViewModel<S : BaseViewModel.VMState, A : BaseViewModel.VMActi
         }
     }
 
-    fun sendMutation(mutation: M) {
+    fun sendMutation(mutation: VMMutation) {
         viewModelScope.launch {
             _mutation.send(mutation)
         }
