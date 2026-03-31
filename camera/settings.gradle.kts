@@ -1,4 +1,4 @@
-rootProject.name = "Distribution-Core-Android"
+rootProject.name = "plugin"
 
 pluginManagement {
     fun Settings.getEnv(
@@ -59,20 +59,3 @@ dependencyResolutionManagement {
         }
     }
 }
-
-
-include(":app")
-val listModule: List<String> = arrayListOf(
-)
-listModule.forEach {
-    includeBuild("$it") {
-        dependencySubstitution {
-            substitute(module("com.chiistudio:$it")).using(project(":$it"))
-        }
-    }
-}
-include(":plugin")
-include(":core")
-include(":network")
-include(":benchmark")
-include(":camera")
