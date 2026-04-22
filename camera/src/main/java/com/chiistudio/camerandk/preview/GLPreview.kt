@@ -2,6 +2,9 @@ package com.chiistudio.camerandk.preview
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.chiistudio.camerandk.jni.NativeRenderer
@@ -10,9 +13,10 @@ import com.chiistudio.camerandk.utils.AssetReader
 import com.chiistudio.camerandk.utils.CurveTone
 import com.chiistudio.camerandk.utils.ShaderBuilder
 import com.chiistudio.camerandk.utils.convertBitmapToByteBuffer
+import java.nio.ByteBuffer
 
 @SuppressLint("ViewConstructor")
-class GLPreview(context: Context) : SurfaceView(context), IFilter,
+open class GLPreview(context: Context) : SurfaceView(context), IFilter,
     SurfaceHolder.Callback2 {
 
 
@@ -48,7 +52,7 @@ class GLPreview(context: Context) : SurfaceView(context), IFilter,
     }
 
 
-    override fun changeFilter(pathFilter: String?, opacity: Float, overlayList: List<String>?) {
+    override fun applyFilter(pathFilter: String?, opacity: Float, overlayList: List<String>?) {
         builder.setFragment(
             ShaderBuilder.buildShader(
                 context,
@@ -81,6 +85,47 @@ class GLPreview(context: Context) : SurfaceView(context), IFilter,
             widths = dataFilter?.map { it.second } ?: listOf(),
             heights = dataFilter?.map { it.third } ?: listOf(),
         )
+    }
+
+    /**
+     * Capture the currently-displayed preview frame (with all active shader
+     * effects applied) as an Android [Bitmap].
+     *
+     * The native layer performs `glReadPixels` on the EGL thread immediately
+     * after the next frame is rendered, so the preview is not disrupted and
+     * no tearing occurs. The callback is dispatched on the main thread.
+     *
+     * If capture fails (e.g. zero-sized buffer), [onCapture] is invoked with
+     * a null [Bitmap].
+     */
+    fun captureFrame(onCapture: (Bitmap?) -> Unit) {
+        NativeRenderer.captureFrame { rgba, w, h ->
+            val bitmap: Bitmap? = if (w > 0 && h > 0 && rgba.size >= w * h * 4) {
+                // glReadPixels produces rows with origin at the bottom-left.
+                // Flip vertically so the Bitmap matches screen orientation.
+                val stride = w * 4
+                val flipped = ByteArray(rgba.size)
+                for (row in 0 until h) {
+                    System.arraycopy(
+                        rgba,
+                        row * stride,
+                        flipped,
+                        (h - 1 - row) * stride,
+                        stride
+                    )
+                }
+                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+                    copyPixelsFromBuffer(ByteBuffer.wrap(flipped))
+                }
+            } else {
+                null
+            }
+            mainHandler.post { onCapture(bitmap) }
+        }
+    }
+
+    companion object {
+        private val mainHandler = Handler(Looper.getMainLooper())
     }
 
 }

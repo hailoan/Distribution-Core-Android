@@ -10,6 +10,9 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <unistd.h>
+#include <atomic>
+#include <functional>
+#include <vector>
 #include "queue"
 #include "mutex"
 #include "condition_variable"
@@ -17,6 +20,10 @@
 #include "video_gl.h"
 
 using namespace std;
+
+// Callback invoked on the EGL thread with a tightly-packed RGBA8888 buffer.
+// Ownership of the buffer stays with the renderer — copy in the callback if needed.
+typedef std::function<void(const uint8_t *pixels, int width, int height)> CapturePixelsCallback;
 
 typedef struct EGLRenderer {
     EGLDisplay display;
@@ -28,6 +35,13 @@ typedef struct EGLRenderer {
     SingleThreadExecutor *thread = new SingleThreadExecutor("egl_renderer");
     VideoGl *gl = new VideoGl();
     AVFrame *currentFrame;
+
+    // One-shot capture request. Set by captureFramePixels(); consumed at the
+    // end of the next renderFrame() on the EGL thread. Accessed only from
+    // the EGL thread, so no locking required.
+    std::atomic<bool> captureRequested{false};
+    CapturePixelsCallback captureCallback;
+    std::vector<uint8_t> captureBuffer;
 };
 
 
@@ -47,6 +61,14 @@ void
 startInitGL(EGLRenderer *egl, ANativeWindow *window, const char *vertex, const char *fragment);
 
 void renderFrame(EGLRenderer *egl, AVFrame *frame);
+
+/**
+ * Request a one-shot readback of the default framebuffer. The callback fires
+ * on the EGL thread after the next renderFrame() completes drawing. If no
+ * frame arrives (camera stalled), the callback will not fire until one does.
+ * Safe to call from any thread.
+ */
+void captureFramePixels(EGLRenderer *egl, CapturePixelsCallback callback);
 
 void cleanup(EGLRenderer *egl);
 

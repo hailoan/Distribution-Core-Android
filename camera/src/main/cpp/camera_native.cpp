@@ -7,6 +7,14 @@
 EGLRenderer *renderer = new EGLRenderer();
 CameraController *g_camera = new CameraController();
 
+// Cached JavaVM so native worker threads can attach and invoke Java callbacks.
+static JavaVM *g_jvm = nullptr;
+
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void * /*reserved*/) {
+    g_jvm = vm;
+    return JNI_VERSION_1_6;
+}
+
 std::vector<const uint8_t *> convertListOfByteBuffers(JNIEnv *env, jobject listObj, std::vector<jlong> &sizes) {
     std::vector<const uint8_t *> result;
 
@@ -116,4 +124,64 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_com_chiistudio_camerandk_jni_NativeRenderer_startCamera(JNIEnv *env, jobject thiz) {
     g_camera->start();
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_chiistudio_camerandk_jni_NativeRenderer_captureFrame(JNIEnv *env, jobject /*thiz*/,
+                                                              jobject callback) {
+    if (callback == nullptr || g_jvm == nullptr) return;
+
+    // Promote the callback to a global ref so it survives until the EGL thread fires.
+    jobject globalCb = env->NewGlobalRef(callback);
+    if (globalCb == nullptr) return;
+
+    captureFramePixels(renderer,
+                       [globalCb](const uint8_t *pixels, int w, int h) {
+                           // Runs on the EGL thread, which is a native (non-Java) thread —
+                           // attach it, invoke the Kotlin callback, then detach.
+                           JNIEnv *cbEnv = nullptr;
+                           bool attached = false;
+                           jint rc = g_jvm->GetEnv(reinterpret_cast<void **>(&cbEnv),
+                                                   JNI_VERSION_1_6);
+                           if (rc == JNI_EDETACHED) {
+                               if (g_jvm->AttachCurrentThread(&cbEnv, nullptr) != JNI_OK) {
+                                   return;
+                               }
+                               attached = true;
+                           } else if (rc != JNI_OK || cbEnv == nullptr) {
+                               return;
+                           }
+
+                           jclass cbClass = cbEnv->GetObjectClass(globalCb);
+                           jmethodID onCaptured = cbEnv->GetMethodID(
+                                   cbClass, "onCaptured", "([BII)V");
+
+                           if (onCaptured != nullptr) {
+                               jbyteArray arr = nullptr;
+                               if (pixels != nullptr && w > 0 && h > 0) {
+                                   const jsize len = static_cast<jsize>(w) * h * 4;
+                                   arr = cbEnv->NewByteArray(len);
+                                   if (arr != nullptr) {
+                                       cbEnv->SetByteArrayRegion(
+                                               arr, 0, len,
+                                               reinterpret_cast<const jbyte *>(pixels));
+                                   }
+                               } else {
+                                   arr = cbEnv->NewByteArray(0);
+                               }
+                               cbEnv->CallVoidMethod(globalCb, onCaptured, arr, w, h);
+                               if (cbEnv->ExceptionCheck()) {
+                                   cbEnv->ExceptionDescribe();
+                                   cbEnv->ExceptionClear();
+                               }
+                               if (arr != nullptr) cbEnv->DeleteLocalRef(arr);
+                           }
+                           cbEnv->DeleteLocalRef(cbClass);
+                           cbEnv->DeleteGlobalRef(globalCb);
+
+                           if (attached) {
+                               g_jvm->DetachCurrentThread();
+                           }
+                       });
 }

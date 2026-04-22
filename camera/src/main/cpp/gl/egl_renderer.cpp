@@ -120,10 +120,49 @@ void renderFrame(EGLRenderer *egl, AVFrame *frame) {
             glClear(GL_COLOR_BUFFER_BIT);
             bindUniformYUV(egl->gl, frame->width, frame->height, frame);
             setAttributes(egl->gl);
+
+            // Drain a pending capture request BEFORE eglSwapBuffers — the back
+            // buffer still holds the freshly-drawn frame. setAttributes() ends
+            // with glFinish(), so all draw calls are complete at this point.
+            if (egl->captureRequested.load(std::memory_order_acquire)) {
+                const int w = egl->w;
+                const int h = egl->h;
+                const size_t needed = static_cast<size_t>(w) * h * 4;
+                if (w > 0 && h > 0) {
+                    if (egl->captureBuffer.size() < needed) {
+                        egl->captureBuffer.resize(needed);
+                    }
+                    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE,
+                                 egl->captureBuffer.data());
+                    GLenum err = glGetError();
+                    if (err != GL_NO_ERROR) {
+                        LOGI("glReadPixels failed: 0x%x", err);
+                    }
+                    if (egl->captureCallback) {
+                        egl->captureCallback(egl->captureBuffer.data(), w, h);
+                    }
+                } else if (egl->captureCallback) {
+                    egl->captureCallback(nullptr, 0, 0);
+                }
+                egl->captureCallback = nullptr;
+                egl->captureRequested.store(false, std::memory_order_release);
+            }
+
             eglSwapBuffers(egl->display, egl->surface);
         } else {
             LOGI("eglMakeCurrent fail %d", eglGetError());
         }
+    });
+}
+
+void captureFramePixels(EGLRenderer *egl, CapturePixelsCallback callback) {
+    if (egl == nullptr || !callback) return;
+    // Hop onto the EGL thread so we serialize with renderFrame without racing.
+    egl->thread->runInThread([egl, callback = std::move(callback)]() mutable {
+        // If a prior request is still pending, replace it — last caller wins.
+        egl->captureCallback = std::move(callback);
+        egl->captureRequested.store(true, std::memory_order_release);
     });
 }
 

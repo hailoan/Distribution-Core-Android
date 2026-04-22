@@ -22,7 +22,7 @@ interface IAdjustVideo {
 }
 
 interface IFilter {
-    fun changeFilter(pathFilter: String?, opacity: Float, overlayList: List<String>?)
+    fun applyFilter(pathFilter: String?, opacity: Float, overlayList: List<String>?)
 }
 
 interface IColorVideo {

@@ -1,0 +1,1 @@
+- [Pipeline shape for capture hooks](project_pipeline_shape.md) — where renderFrame, EGL thread, and JNI singletons sit; governs capture hook placement
