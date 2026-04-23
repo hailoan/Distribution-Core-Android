@@ -17,7 +17,7 @@ import java.nio.ByteBuffer
 
 @SuppressLint("ViewConstructor")
 open class GLPreview(context: Context) : SurfaceView(context), IFilter, ICameraControl,
-    SurfaceHolder.Callback2 {
+    SurfaceHolder.Callback2{
 
 
     val builder: CameraBuilder = CameraBuilder()
