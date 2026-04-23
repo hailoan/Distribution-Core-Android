@@ -12,9 +12,11 @@
 #include <camera/NdkCameraDevice.h>
 #include <camera/NdkCameraCaptureSession.h>
 #include <media/NdkImageReader.h>
+#include <map>
 #include <mutex>
 #include <string>
 #include <functional>
+#include <utility>
 
 extern "C" {
 #include <libavutil/frame.h>
@@ -104,6 +106,25 @@ public:
     // Or set exact dimensions
     void setResolution(int w, int h);
 
+    // Store the resolution associated with a (mode, lens) combination.
+    // Takes effect the next time that combination becomes active via
+    // setMode() / setLens(). Dimensions are the requested values; the
+    // controller falls back to the highest supported size for the current
+    // lens if the request is not advertised by the HAL.
+    //
+    // mode: 1=PHOTO, 2=VIDEO   (matches CaptureMode enum values)
+    // lens: 0=BACK, 1=FRONT
+    void setResolutionForModeLens(int mode, int lens, int w, int h);
+
+    // ── Feature 4: lens facing ───────────────────────────────────────────────
+
+    // Switch to the specified lens facing. Closes and reopens the camera
+    // device if the facing changes. Applies the resolution stored for
+    // (current mode, new lens).
+    //
+    // lens: 0=BACK, 1=FRONT
+    void setLens(int lens);
+
     // ── Feature 3: preview quality ───────────────────────────────────────────
 
     // Apply a quality preset — updates sws flags + camera controls
@@ -154,11 +175,41 @@ private:
     SwsContext* sws_      = nullptr;
     std::mutex  frameMtx_;
 
+    // ── Lens state ───────────────────────────────────────────────────────────
+    int          lens_           = 0;      // 0=BACK, 1=FRONT
+    std::string  activeCameraId_;
+
+    // Per-(mode, lens) requested resolutions, keyed by (mode, lens) pair.
+    std::map<std::pair<int,int>, Resolution> resolutionMap_;
+
     // ── Internal helpers ─────────────────────────────────────────────────────
+
+    // Pick a camera id matching the requested facing (0=back, 1=front).
+    // Falls back to the first available id if no match is found.
+    std::string pickCameraByFacing(int facing);
+
+    // Legacy — defers to pickCameraByFacing(0).
     std::string pickBestCamera();
+
+    // Resolve a requested (w,h) against the camera's advertised stream
+    // configurations. If the exact size is advertised, returns it; else
+    // returns the largest advertised YUV_420_888 size ≤ requested (or the
+    // smallest advertised size if nothing fits). Requires an open device.
+    Resolution resolveSupportedSize(const std::string& cameraId, int reqW, int reqH);
+
+    // Tear down device + session + reader without destroying mgr_/renderer.
+    void closeDevice();
+
+    // Open a device for activeCameraId_ and build an initial
+    // AImageReader + request + session using the current width/height.
+    bool openDevice();
 
     // Rebuild AImageReader + session with current width/height
     void reopenSession();
+
+    // Apply (mode_, lens_) entry from resolutionMap_ to width_/height_,
+    // with supported-size fallback. No-op if no entry exists.
+    void applyResolutionForCurrent();
 
     // Apply current quality controls to the capture request
     void applyQualityToRequest();

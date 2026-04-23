@@ -37,6 +37,15 @@ open class GLPreview(context: Context) : SurfaceView(context), IFilter,
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         NativeRenderer.nativeInit(holder.surface, builder.vertex, builder.fragment)
+        val entries = builder.resolutionEntries()
+        NativeRenderer.nativeSetResolutionMap(
+            modes = IntArray(entries.size) { entries[it].mode.nativeValue },
+            lenses = IntArray(entries.size) { entries[it].lens.nativeValue },
+            widths = IntArray(entries.size) { entries[it].preset.width },
+            heights = IntArray(entries.size) { entries[it].preset.height },
+        )
+        NativeRenderer.nativeSetLens(builder.initialLens.nativeValue)
+        NativeRenderer.nativeSetMode(builder.initialMode.nativeValue)
         NativeRenderer.startCamera()
     }
 

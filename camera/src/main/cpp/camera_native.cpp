@@ -79,17 +79,49 @@ Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeInit(JNIEnv *env, jobject
         g_camera->renderer = renderer;
 
         g_camera->open();
-
-        g_camera->setMode(CaptureMode::PREVIEW);
-
-        g_camera->setResolution(2);        // 1080p
-        g_camera->setResolution(1920, 800); // custom
         g_camera->setPreviewQuality(3);    // ultra
-
 
         env->ReleaseStringUTFChars(vertex,   v);
         env->ReleaseStringUTFChars(fragment, f);
     }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeSetResolutionMap(
+        JNIEnv *env, jobject /*thiz*/,
+        jintArray modes, jintArray lenses, jintArray widths, jintArray heights) {
+    const jsize n = env->GetArrayLength(modes);
+    if (env->GetArrayLength(lenses) != n ||
+        env->GetArrayLength(widths) != n ||
+        env->GetArrayLength(heights) != n) {
+        return;
+    }
+    jint *mArr = env->GetIntArrayElements(modes, nullptr);
+    jint *lArr = env->GetIntArrayElements(lenses, nullptr);
+    jint *wArr = env->GetIntArrayElements(widths, nullptr);
+    jint *hArr = env->GetIntArrayElements(heights, nullptr);
+    for (jsize i = 0; i < n; i++) {
+        g_camera->setResolutionForModeLens(mArr[i], lArr[i], wArr[i], hArr[i]);
+    }
+    env->ReleaseIntArrayElements(modes, mArr, JNI_ABORT);
+    env->ReleaseIntArrayElements(lenses, lArr, JNI_ABORT);
+    env->ReleaseIntArrayElements(widths, wArr, JNI_ABORT);
+    env->ReleaseIntArrayElements(heights, hArr, JNI_ABORT);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeSetMode(
+        JNIEnv * /*env*/, jobject /*thiz*/, jint mode) {
+    g_camera->setMode(static_cast<CaptureMode>(mode));
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeSetLens(
+        JNIEnv * /*env*/, jobject /*thiz*/, jint lens) {
+    g_camera->setLens(lens);
 }
 extern "C"
 JNIEXPORT void JNICALL

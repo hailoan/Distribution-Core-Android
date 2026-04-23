@@ -30,21 +30,31 @@ static void onCaptureSessionClosed(void* ctx, ACameraCaptureSession* s) {
 // ── open ──────────────────────────────────────────────────────────────────────
 
 bool CameraController::open(const char* cameraId) {
-    mgr_ = ACameraManager_create();
+    if (!mgr_) mgr_ = ACameraManager_create();
 
-    std::string id = cameraId ? cameraId : pickBestCamera();
-    if (id.empty()) { LOGE("No back camera found"); return false; }
+    activeCameraId_ = cameraId ? cameraId : pickCameraByFacing(lens_);
+    if (activeCameraId_.empty()) { LOGE("No camera found for facing %d", lens_); return false; }
+
+    return openDevice();
+}
+
+bool CameraController::openDevice() {
+    if (!mgr_ || activeCameraId_.empty()) return false;
 
     ACameraDevice_StateCallbacks devCb{};
     devCb.context         = this;
     devCb.onDisconnected  = onDeviceDisconnected;
     devCb.onError         = onDeviceError;
 
-    if (ACameraManager_openCamera(mgr_, id.c_str(), &devCb, &device_) != ACAMERA_OK) {
+    if (ACameraManager_openCamera(mgr_, activeCameraId_.c_str(), &devCb, &device_) != ACAMERA_OK) {
         LOGE("openCamera failed"); return false;
     }
 
-    // AImageReader: JPEG_420_888 → we get planar Y/U/V
+    // Honour the supported-size fallback for the selected camera.
+    Resolution resolved = resolveSupportedSize(activeCameraId_, width, height);
+    width  = resolved.width;
+    height = resolved.height;
+
     AImageReader_new(width, height,
                      AIMAGE_FORMAT_YUV_420_888,
             /*maxImages=*/4,
@@ -63,8 +73,11 @@ bool CameraController::open(const char* cameraId) {
     ACaptureSessionOutputContainer_add(container_, output_);
 
     ACameraOutputTarget_create(window, &target_);
-    ACameraDevice_createCaptureRequest(device_, TEMPLATE_PREVIEW, &request_);
+    ACameraDevice_request_template tmpl = (mode_ == CaptureMode::VIDEO)
+                            ? TEMPLATE_RECORD : TEMPLATE_PREVIEW;
+    ACameraDevice_createCaptureRequest(device_, tmpl, &request_);
     ACaptureRequest_addTarget(request_, target_);
+    applyQualityToRequest();
 
     ACameraCaptureSession_stateCallbacks sessionCb{};
     sessionCb.context   = this;
@@ -73,6 +86,22 @@ bool CameraController::open(const char* cameraId) {
 
     ACameraDevice_createCaptureSession(device_, container_, &sessionCb, &session_);
     return true;
+}
+
+void CameraController::closeDevice() {
+    if (session_) {
+        ACameraCaptureSession_stopRepeating(session_);
+        ACameraCaptureSession_close(session_);
+        session_ = nullptr;
+    }
+    if (request_)   { ACaptureRequest_free(request_); request_ = nullptr; }
+    if (target_)    { ACameraOutputTarget_free(target_); target_ = nullptr; }
+    if (container_) { ACaptureSessionOutputContainer_free(container_); container_ = nullptr; }
+    if (output_)    { ACaptureSessionOutput_free(output_); output_ = nullptr; }
+    if (device_)    { ACameraDevice_close(device_); device_ = nullptr; }
+    if (reader_)    { AImageReader_delete(reader_); reader_ = nullptr; }
+    if (sws_)       { sws_freeContext(sws_); sws_ = nullptr; }
+    if (yuv_)       { av_frame_free(&yuv_); }
 }
 
 // ── start / stop ──────────────────────────────────────────────────────────────
@@ -173,39 +202,100 @@ void CameraController::handleImage(AImageReader* reader) {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-std::string CameraController::pickBestCamera() {
+std::string CameraController::pickCameraByFacing(int facing) {
+    if (!mgr_) return "";
+    uint8_t wanted = (facing == 1)
+                     ? (uint8_t)ACAMERA_LENS_FACING_FRONT
+                     : (uint8_t)ACAMERA_LENS_FACING_BACK;
+
     ACameraIdList* list = nullptr;
     ACameraManager_getCameraIdList(mgr_, &list);
     std::string chosen;
+    std::string fallback;
     for (int i = 0; i < list->numCameras; i++) {
         ACameraMetadata* meta = nullptr;
         ACameraManager_getCameraCharacteristics(mgr_, list->cameraIds[i], &meta);
         ACameraMetadata_const_entry entry{};
-        ACameraMetadata_getConstEntry(meta, ACAMERA_LENS_FACING, &entry);
-        if (entry.data.u8[0] == ACAMERA_LENS_FACING_BACK) {
-            chosen = list->cameraIds[i];
-            ACameraMetadata_free(meta);
-            break;
+        if (ACameraMetadata_getConstEntry(meta, ACAMERA_LENS_FACING, &entry) == ACAMERA_OK) {
+            if (fallback.empty()) fallback = list->cameraIds[i];
+            if (entry.data.u8[0] == wanted) {
+                chosen = list->cameraIds[i];
+                ACameraMetadata_free(meta);
+                break;
+            }
         }
         ACameraMetadata_free(meta);
     }
     ACameraManager_deleteCameraIdList(list);
-    LOGE("camera mode %s", chosen.c_str());
+    if (chosen.empty()) chosen = fallback;
+    LOGE("pickCameraByFacing(%d) → %s", facing, chosen.c_str());
     return chosen;
+}
+
+std::string CameraController::pickBestCamera() {
+    return pickCameraByFacing(0);
+}
+
+Resolution CameraController::resolveSupportedSize(const std::string& cameraId,
+                                                  int reqW, int reqH) {
+    Resolution fallback{ reqW, reqH, "requested" };
+    if (!mgr_ || cameraId.empty()) return fallback;
+
+    ACameraMetadata* meta = nullptr;
+    if (ACameraManager_getCameraCharacteristics(mgr_, cameraId.c_str(), &meta) != ACAMERA_OK || !meta) {
+        return fallback;
+    }
+
+    ACameraMetadata_const_entry entry{};
+    if (ACameraMetadata_getConstEntry(
+            meta, ACAMERA_SCALER_AVAILABLE_STREAM_CONFIGURATIONS, &entry) != ACAMERA_OK) {
+        ACameraMetadata_free(meta);
+        return fallback;
+    }
+
+    // Entries are tuples of (format, width, height, input/output).
+    // Output = 0, Input = 1. Match YUV_420_888 output streams only.
+    const int32_t wantedFormat = AIMAGE_FORMAT_YUV_420_888;
+    int bestLeW = 0, bestLeH = 0;             // largest ≤ requested
+    int smallestW = 0, smallestH = 0;         // smallest overall (fallback-up)
+    int exactW = 0, exactH = 0;
+    const int64_t reqPixels = (int64_t)reqW * reqH;
+
+    for (uint32_t i = 0; i < entry.count; i += 4) {
+        int32_t fmt   = entry.data.i32[i];
+        int32_t w     = entry.data.i32[i + 1];
+        int32_t h     = entry.data.i32[i + 2];
+        int32_t input = entry.data.i32[i + 3];
+        if (input != 0 || fmt != wantedFormat) continue;
+
+        if (w == reqW && h == reqH) { exactW = w; exactH = h; break; }
+
+        const int64_t px = (int64_t)w * h;
+        if (px <= reqPixels && px > (int64_t)bestLeW * bestLeH) {
+            bestLeW = w; bestLeH = h;
+        }
+        if (smallestW == 0 || px < (int64_t)smallestW * smallestH) {
+            smallestW = w; smallestH = h;
+        }
+    }
+    ACameraMetadata_free(meta);
+
+    if (exactW > 0) return Resolution{ exactW, exactH, "exact" };
+    if (bestLeW > 0) {
+        LOGE("Requested %dx%d unsupported; using %dx%d", reqW, reqH, bestLeW, bestLeH);
+        return Resolution{ bestLeW, bestLeH, "fallback" };
+    }
+    if (smallestW > 0) {
+        LOGE("No size ≤ %dx%d; using smallest supported %dx%d", reqW, reqH, smallestW, smallestH);
+        return Resolution{ smallestW, smallestH, "fallback" };
+    }
+    return fallback;
 }
 
 void CameraController::release() {
     stop();
-    if (session_)   { ACameraCaptureSession_close(session_); session_ = nullptr; }
-    if (request_)   { ACaptureRequest_free(request_); request_ = nullptr; }
-    if (target_)    { ACameraOutputTarget_free(target_); target_ = nullptr; }
-    if (container_) { ACaptureSessionOutputContainer_free(container_); container_ = nullptr; }
-    if (output_)    { ACaptureSessionOutput_free(output_); output_ = nullptr; }
-    if (device_)    { ACameraDevice_close(device_); device_ = nullptr; }
-    if (reader_)    { AImageReader_delete(reader_); reader_ = nullptr; }
-    if (mgr_)       { ACameraManager_delete(mgr_); mgr_ = nullptr; }
-    if (yuv_)       { av_frame_free(&yuv_); }
-    if (sws_)       { sws_freeContext(sws_); sws_ = nullptr; }
+    closeDevice();
+    if (mgr_) { ACameraManager_delete(mgr_); mgr_ = nullptr; }
 }
 
 void CameraController::onDisconnected(ACameraDevice*) { LOGE("Camera disconnected"); }
@@ -215,15 +305,36 @@ void CameraController::onSessionClosed(ACameraCaptureSession*) { LOGE("Session c
 
 
 void CameraController::setMode(CaptureMode mode) {
-    std::lock_guard<std::mutex> lock(frameMtx_);
     if (mode_ == CaptureMode::VIDEO && isRecording_) {
         LOGE("stopRecording before switching mode");
         return;
     }
     mode_ = mode;
 
-    // Switch capture template on the request
-    if (session_) {
+    // Decide the target dimensions for (new mode, current lens).
+    int targetW = width;
+    int targetH = height;
+    auto it = resolutionMap_.find({ (int)mode_, lens_ });
+    if (it != resolutionMap_.end()) {
+        Resolution r = resolveSupportedSize(activeCameraId_,
+                                            it->second.width,
+                                            it->second.height);
+        targetW = r.width;
+        targetH = r.height;
+    }
+
+    const bool dimsChanged = (targetW != width) || (targetH != height);
+
+    if (dimsChanged) {
+        {
+            std::lock_guard<std::mutex> lock(frameMtx_);
+            width  = targetW;
+            height = targetH;
+        }
+        if (session_) reopenSession();    // picks template from mode_
+    } else if (session_) {
+        // Same size → only swap the template on the live request.
+        std::lock_guard<std::mutex> lock(frameMtx_);
         ACaptureRequest_free(request_);
         request_ = nullptr;
         ACameraDevice_request_template tmpl = (mode == CaptureMode::VIDEO)
@@ -232,11 +343,56 @@ void CameraController::setMode(CaptureMode mode) {
         ACameraDevice_createCaptureRequest(device_, tmpl, &request_);
         ACaptureRequest_addTarget(request_, target_);
         applyQualityToRequest();
-        // restart repeating with new template
         ACameraCaptureSession_stopRepeating(session_);
         ACameraCaptureSession_setRepeatingRequest(session_, nullptr, 1, &request_, nullptr);
     }
-    LOGE("Mode switched to %d", (int)mode);
+    LOGE("Mode switched to %d (%dx%d)", (int)mode, width, height);
+}
+
+void CameraController::setLens(int lens) {
+    if (lens != 0 && lens != 1) return;
+    if (lens == lens_ && device_) return;
+
+    if (mode_ == CaptureMode::VIDEO && isRecording_) {
+        LOGE("stopRecording before switching lens");
+        return;
+    }
+
+    lens_ = lens;
+
+    // Apply the resolution registered for (current mode, new lens) before
+    // we reopen the device so openDevice() sizes the reader correctly.
+    auto it = resolutionMap_.find({ (int)mode_, lens_ });
+    if (it != resolutionMap_.end()) {
+        width  = it->second.width;
+        height = it->second.height;
+    }
+
+    // Close and reopen on the new facing.
+    closeDevice();
+    activeCameraId_ = pickCameraByFacing(lens_);
+    if (activeCameraId_.empty()) {
+        LOGE("setLens(%d): no matching camera id", lens_);
+        return;
+    }
+    if (openDevice()) {
+        ACameraCaptureSession_setRepeatingRequest(session_, nullptr, 1, &request_, nullptr);
+    }
+    LOGE("Lens switched to %d (camera %s)", lens_, activeCameraId_.c_str());
+}
+
+void CameraController::setResolutionForModeLens(int mode, int lens, int w, int h) {
+    resolutionMap_[{ mode, lens }] = Resolution{ w, h, "requested" };
+    // If this entry matches the currently-active combination, apply immediately.
+    if (mode == (int)mode_ && lens == lens_) {
+        setResolution(w, h);
+    }
+}
+
+void CameraController::applyResolutionForCurrent() {
+    auto it = resolutionMap_.find({ (int)mode_, lens_ });
+    if (it == resolutionMap_.end()) return;
+    setResolution(it->second.width, it->second.height);
 }
 
 void CameraController::capturePhoto(const char* outputPath,

@@ -10,6 +10,28 @@ object NativeRenderer {
     external fun nativeInit(surface: Surface, vertex: String, fragment: String)
     external fun nativeRender()
 
+    /**
+     * Push the per-(mode × lens) resolution map to the native controller.
+     * All four parallel arrays must be the same length.
+     *
+     * @param modes   per-entry mode (see [com.chiistudio.camerandk.model.CameraMode.nativeValue])
+     * @param lenses  per-entry lens facing (see [com.chiistudio.camerandk.model.CameraLens.nativeValue])
+     * @param widths  requested width per entry
+     * @param heights requested height per entry
+     */
+    external fun nativeSetResolutionMap(
+        modes: IntArray,
+        lenses: IntArray,
+        widths: IntArray,
+        heights: IntArray,
+    )
+
+    /** Switch active capture mode. Reopens session if resolution differs. */
+    external fun nativeSetMode(mode: Int)
+
+    /** Switch active lens facing. Closes and reopens the camera device. */
+    external fun nativeSetLens(lens: Int)
+
     external fun nativeCleanup()
 
     /**
