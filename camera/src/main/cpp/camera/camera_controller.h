@@ -93,9 +93,10 @@ public:
                       std::function<void(const std::string&)> callback);
 
     // Start video recording. Only valid in VIDEO mode. `bitrate` ≤ 0 picks a
-    // width×height-derived default. Returns false if mode != VIDEO or the
-    // encoder could not open (e.g. path not writable).
-    bool startRecording(const char* outputPath, int bitrate = 0);
+    // width×height-derived default. `orientation` is the rotation hint in
+    // degrees (0/90/180/270) written into the MP4 for players to apply.
+    // Returns false if mode != VIDEO or the encoder could not open.
+    bool startRecording(const char* outputPath, int bitrate = 0, int orientation = 0);
 
     // Stop recording and finalize the file. callback fires on the encoder
     // thread with the output path on success, empty string on failure.

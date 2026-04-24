@@ -71,11 +71,18 @@ object NativeRenderer {
      * the currently-configured camera resolution and the FPS from the active
      * preview-quality preset.
      *
-     * @param bitrate target bitrate in bits/s, or ≤ 0 to use a resolution-
-     *                derived default (≈ 6 Mbps at 1080p30).
+     * @param bitrate     target bitrate in bits/s, or ≤ 0 to use a resolution-
+     *                    derived default (≈ 6 Mbps at 1080p30).
+     * @param orientation MP4 rotation hint in degrees (0/90/180/270). Players
+     *                    apply this on playback so the stream displays right-
+     *                    side up. Ignored on devices below API 26.
      * @return true if the encoder opened successfully.
      */
-    external fun nativeStartRecording(outputPath: String, bitrate: Int): Boolean
+    external fun nativeStartRecording(
+        outputPath: String,
+        bitrate: Int,
+        orientation: Int,
+    ): Boolean
 
     /**
      * Finalize the current recording. [callback] is invoked on the encoder

@@ -411,7 +411,7 @@ void CameraController::capturePhoto(const char* outputPath,
     pendingPhoto_  = true;  // consumed on next handleImage()
 }
 
-bool CameraController::startRecording(const char* outputPath, int bitrate) {
+bool CameraController::startRecording(const char* outputPath, int bitrate, int orientation) {
     std::lock_guard<std::mutex> lock(frameMtx_);
     if (mode_ != CaptureMode::VIDEO) {
         LOGE("startRecording: call setMode(VIDEO) first");
@@ -431,13 +431,14 @@ bool CameraController::startRecording(const char* outputPath, int bitrate) {
                    ? bitrate
                    : static_cast<int>(static_cast<int64_t>(width) * height * fps * 12 / 100);
 
-    if (!encoder_.start(outputPath, width, height, fps, br)) {
+    if (!encoder_.start(outputPath, width, height, fps, br, orientation)) {
         LOGE("startRecording: encoder open failed");
         return false;
     }
     recordingPath_ = outputPath;
     isRecording_   = true;
-    LOGI("Recording started %dx%d@%d %dbps → %s", width, height, fps, br, outputPath);
+    LOGI("Recording started %dx%d@%d %dbps rot=%d → %s",
+         width, height, fps, br, orientation, outputPath);
     return true;
 }
 

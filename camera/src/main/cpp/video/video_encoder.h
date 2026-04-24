@@ -30,9 +30,12 @@ public:
     // Open the encoder and muxer, begin accepting frames.
     // Safe to call only when !isRunning(). Returns false on failure (muxer/codec
     // not created, file not openable); partial state is cleaned up on failure.
+    // `orientation` in degrees (0/90/180/270) is written as an MP4 rotation
+    // hint — players read it to display the stream right-side up.
     bool start(const std::string& outputPath,
                int width, int height,
-               int fps, int bitrate);
+               int fps, int bitrate,
+               int orientation = 0);
 
     // Queue a YUV420P frame for encoding. Takes ownership: the encoder clones
     // the frame internally and the caller must still free their own reference.

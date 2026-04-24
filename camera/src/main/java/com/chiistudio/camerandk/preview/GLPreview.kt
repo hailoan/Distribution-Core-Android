@@ -113,11 +113,14 @@ open class GLPreview(context: Context) : SurfaceView(context), IFilter,
      * builder (or a future runtime setter). Returns false if the encoder
      * failed to open — see logcat for the specific failure.
      *
-     * @param bitrate target bitrate in bits/s; pass 0 to use a resolution-
-     *                derived default.
+     * @param bitrate     target bitrate in bits/s; pass 0 to use a resolution-
+     *                    derived default.
+     * @param orientation MP4 rotation hint in degrees (0/90/180/270). Typical
+     *                    values for a portrait-held phone: 90 for back lens,
+     *                    270 for front lens.
      */
-    fun startRecording(outputPath: String, bitrate: Int = 0): Boolean =
-        NativeRenderer.nativeStartRecording(outputPath, bitrate)
+    fun startRecording(outputPath: String, bitrate: Int = 0, orientation: Int = 0): Boolean =
+        NativeRenderer.nativeStartRecording(outputPath, bitrate, orientation)
 
     /**
      * Stop the current recording and finalize the MP4. [onStopped] is

@@ -161,10 +161,12 @@ Java_com_chiistudio_camerandk_jni_NativeRenderer_startCamera(JNIEnv *env, jobjec
 extern "C"
 JNIEXPORT jboolean JNICALL
 Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeStartRecording(
-        JNIEnv *env, jobject /*thiz*/, jstring outputPath, jint bitrate) {
+        JNIEnv *env, jobject /*thiz*/, jstring outputPath, jint bitrate, jint orientation) {
     if (outputPath == nullptr) return JNI_FALSE;
     const char *path = env->GetStringUTFChars(outputPath, nullptr);
-    bool ok = g_camera->startRecording(path, static_cast<int>(bitrate));
+    bool ok = g_camera->startRecording(path,
+                                       static_cast<int>(bitrate),
+                                       static_cast<int>(orientation));
     env->ReleaseStringUTFChars(outputPath, path);
     return ok ? JNI_TRUE : JNI_FALSE;
 }

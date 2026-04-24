@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <cstring>
 
+#include <android/api-level.h>
 #include <media/NdkMediaFormat.h>
 
 extern "C" {
@@ -45,7 +46,8 @@ VideoEncoder::~VideoEncoder() {
 
 bool VideoEncoder::start(const std::string& outputPath,
                          int width, int height,
-                         int fps, int bitrate) {
+                         int fps, int bitrate,
+                         int orientation) {
     if (running_.load(std::memory_order_acquire)) {
         LOGE("VideoEncoder::start called while already running");
         return false;
@@ -104,6 +106,13 @@ bool VideoEncoder::start(const std::string& outputPath,
         LOGE("AMediaMuxer_new failed");
         closeAll();
         return false;
+    }
+
+    // Normalize orientation to {0, 90, 180, 270} then tag the MP4 so players
+    // rotate the stream on playback. AMediaMuxer_setOrientationHint is API 26+.
+    const int rot = ((orientation % 360) + 360) % 360;
+    if (rot != 0 && android_get_device_api_level() >= 26) {
+        AMediaMuxer_setOrientationHint(muxer_, rot);
     }
 
     // Track is added later, when the codec emits its INFO_OUTPUT_FORMAT_CHANGED
