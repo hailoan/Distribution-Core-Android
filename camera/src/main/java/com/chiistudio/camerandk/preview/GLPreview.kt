@@ -107,6 +107,30 @@ open class GLPreview(context: Context) : SurfaceView(context), IFilter,
      * If capture fails (e.g. zero-sized buffer), [onCapture] is invoked with
      * a null [Bitmap].
      */
+    /**
+     * Start H.264/MP4 video recording to [outputPath]. The caller is
+     * responsible for having switched the camera into VIDEO mode via the
+     * builder (or a future runtime setter). Returns false if the encoder
+     * failed to open — see logcat for the specific failure.
+     *
+     * @param bitrate target bitrate in bits/s; pass 0 to use a resolution-
+     *                derived default.
+     */
+    fun startRecording(outputPath: String, bitrate: Int = 0): Boolean =
+        NativeRenderer.nativeStartRecording(outputPath, bitrate)
+
+    /**
+     * Stop the current recording and finalize the MP4. [onStopped] is
+     * dispatched on the main thread with the output path on success, or null
+     * if no recording was active / finalization failed.
+     */
+    fun stopRecording(onStopped: (String?) -> Unit) {
+        NativeRenderer.nativeStopRecording { path ->
+            val result = path.takeIf { it.isNotEmpty() }
+            mainHandler.post { onStopped(result) }
+        }
+    }
+
     fun captureFrame(onCapture: (Bitmap?) -> Unit) {
         NativeRenderer.captureFrame { rgba, w, h ->
             val bitmap: Bitmap? = if (w > 0 && h > 0 && rgba.size >= w * h * 4) {

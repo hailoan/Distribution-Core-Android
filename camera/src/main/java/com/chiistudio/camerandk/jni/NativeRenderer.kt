@@ -65,4 +65,29 @@ object NativeRenderer {
         fun onCaptured(rgba: ByteArray, width: Int, height: Int)
     }
 
+    /**
+     * Start H.264 / MP4 video recording to [outputPath]. Only valid after
+     * [nativeSetMode] has switched the camera into VIDEO mode. Recording uses
+     * the currently-configured camera resolution and the FPS from the active
+     * preview-quality preset.
+     *
+     * @param bitrate target bitrate in bits/s, or ≤ 0 to use a resolution-
+     *                derived default (≈ 6 Mbps at 1080p30).
+     * @return true if the encoder opened successfully.
+     */
+    external fun nativeStartRecording(outputPath: String, bitrate: Int): Boolean
+
+    /**
+     * Finalize the current recording. [callback] is invoked on the encoder
+     * thread with the output path on success, or an empty string on failure
+     * or when no recording is active. Consumers must marshal to the main
+     * thread themselves.
+     */
+    external fun nativeStopRecording(callback: RecordingCallback)
+
+    fun interface RecordingCallback {
+        /** @param outputPath path to the finalized MP4, or "" on failure */
+        fun onStopped(outputPath: String)
+    }
+
 }

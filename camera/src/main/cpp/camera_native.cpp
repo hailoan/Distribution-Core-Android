@@ -159,6 +159,55 @@ Java_com_chiistudio_camerandk_jni_NativeRenderer_startCamera(JNIEnv *env, jobjec
 }
 
 extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeStartRecording(
+        JNIEnv *env, jobject /*thiz*/, jstring outputPath, jint bitrate) {
+    if (outputPath == nullptr) return JNI_FALSE;
+    const char *path = env->GetStringUTFChars(outputPath, nullptr);
+    bool ok = g_camera->startRecording(path, static_cast<int>(bitrate));
+    env->ReleaseStringUTFChars(outputPath, path);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeStopRecording(
+        JNIEnv *env, jobject /*thiz*/, jobject callback) {
+    if (g_jvm == nullptr) return;
+    jobject globalCb = callback ? env->NewGlobalRef(callback) : nullptr;
+
+    g_camera->stopRecording([globalCb](const std::string &result) {
+        if (globalCb == nullptr) return;
+        // Fires on the encoder thread — attach to the JVM to invoke Kotlin.
+        JNIEnv *cbEnv = nullptr;
+        bool attached = false;
+        jint rc = g_jvm->GetEnv(reinterpret_cast<void **>(&cbEnv), JNI_VERSION_1_6);
+        if (rc == JNI_EDETACHED) {
+            if (g_jvm->AttachCurrentThread(&cbEnv, nullptr) != JNI_OK) return;
+            attached = true;
+        } else if (rc != JNI_OK || cbEnv == nullptr) {
+            return;
+        }
+
+        jclass cbClass = cbEnv->GetObjectClass(globalCb);
+        jmethodID onStopped = cbEnv->GetMethodID(
+                cbClass, "onStopped", "(Ljava/lang/String;)V");
+        if (onStopped != nullptr) {
+            jstring jpath = cbEnv->NewStringUTF(result.c_str());
+            cbEnv->CallVoidMethod(globalCb, onStopped, jpath);
+            if (cbEnv->ExceptionCheck()) {
+                cbEnv->ExceptionDescribe();
+                cbEnv->ExceptionClear();
+            }
+            if (jpath) cbEnv->DeleteLocalRef(jpath);
+        }
+        cbEnv->DeleteLocalRef(cbClass);
+        cbEnv->DeleteGlobalRef(globalCb);
+        if (attached) g_jvm->DetachCurrentThread();
+    });
+}
+
+extern "C"
 JNIEXPORT void JNICALL
 Java_com_chiistudio_camerandk_jni_NativeRenderer_captureFrame(JNIEnv *env, jobject /*thiz*/,
                                                               jobject callback) {

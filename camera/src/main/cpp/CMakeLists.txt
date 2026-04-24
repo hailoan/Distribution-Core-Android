@@ -114,6 +114,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         gl/texture_loader.cpp
         gl/egl_renderer.cpp
         gl/video_gl.cpp
+        video/video_encoder.cpp
 )
 
 

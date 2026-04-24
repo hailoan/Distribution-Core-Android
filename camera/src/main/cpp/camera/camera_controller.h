@@ -8,6 +8,7 @@
 #pragma once
 
 #include "../gl/egl_renderer.h"
+#include "../video/video_encoder.h"
 #include <camera/NdkCameraManager.h>
 #include <camera/NdkCameraDevice.h>
 #include <camera/NdkCameraCaptureSession.h>
@@ -91,9 +92,15 @@ public:
     void capturePhoto(const char* outputPath,
                       std::function<void(const std::string&)> callback);
 
-    // Start/stop video recording (only valid in VIDEO mode)
-    void startRecording(const char* outputPath);
-    void stopRecording();
+    // Start video recording. Only valid in VIDEO mode. `bitrate` ≤ 0 picks a
+    // width×height-derived default. Returns false if mode != VIDEO or the
+    // encoder could not open (e.g. path not writable).
+    bool startRecording(const char* outputPath, int bitrate = 0);
+
+    // Stop recording and finalize the file. callback fires on the encoder
+    // thread with the output path on success, empty string on failure.
+    // No-op (fires empty) if not currently recording.
+    void stopRecording(std::function<void(const std::string&)> callback);
 
     CaptureMode getMode() const { return mode_; }
 
@@ -174,6 +181,9 @@ private:
     AVFrame*    yuv_      = nullptr;
     SwsContext* sws_      = nullptr;
     std::mutex  frameMtx_;
+
+    // ── Video encoder (owned) ────────────────────────────────────────────────
+    VideoEncoder encoder_;
 
     // ── Lens state ───────────────────────────────────────────────────────────
     int          lens_           = 0;      // 0=BACK, 1=FRONT

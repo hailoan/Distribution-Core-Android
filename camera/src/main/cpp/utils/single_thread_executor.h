@@ -9,8 +9,6 @@
 #include <thread>
 #include <queue>
 
-#endif //VIDEOEDITOR_SINGLE_THREAD_EXECUTOR_H
-
 class SingleThreadExecutor {
 public:
     const char *tag;
@@ -64,3 +62,5 @@ private:
 
     }
 };
+
+#endif //VIDEOEDITOR_SINGLE_THREAD_EXECUTOR_H

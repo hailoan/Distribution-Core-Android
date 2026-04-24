@@ -198,6 +198,14 @@ void CameraController::handleImage(AImageReader* reader) {
         AVFrame* cloned = av_frame_clone(yuv_);
         renderFrame(renderer, cloned);  // egl_renderer.cpp handles GL thread dispatch
     }
+
+    // In VIDEO mode, also push the frame into the encoder. encodeFrame()
+    // clones internally and drops cleanly when the encoder is backed up,
+    // so this cannot stall the camera callback thread.
+    if (mode_ == CaptureMode::VIDEO && isRecording_ && encoder_.isRunning()) {
+        AVFrame* enc = av_frame_clone(yuv_);
+        encoder_.encodeFrame(enc);
+    }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -403,21 +411,48 @@ void CameraController::capturePhoto(const char* outputPath,
     pendingPhoto_  = true;  // consumed on next handleImage()
 }
 
-void CameraController::startRecording(const char* outputPath) {
+bool CameraController::startRecording(const char* outputPath, int bitrate) {
     std::lock_guard<std::mutex> lock(frameMtx_);
     if (mode_ != CaptureMode::VIDEO) {
-        LOGE("Call setMode(VIDEO) first");
-        return;
+        LOGE("startRecording: call setMode(VIDEO) first");
+        return false;
+    }
+    if (isRecording_) {
+        LOGE("startRecording: already recording");
+        return false;
+    }
+
+    // Use the HAL upper FPS from the active quality preset, fall back to 30.
+    const int fps = (qualityIndex_ >= 0 && qualityIndex_ < 4)
+                    ? QUALITY_PRESETS[qualityIndex_].fpsMax
+                    : 30;
+    // Default bitrate: ~0.12 bpp at target fps → ~6 Mbps for 1080p30.
+    const int br = (bitrate > 0)
+                   ? bitrate
+                   : static_cast<int>(static_cast<int64_t>(width) * height * fps * 12 / 100);
+
+    if (!encoder_.start(outputPath, width, height, fps, br)) {
+        LOGE("startRecording: encoder open failed");
+        return false;
     }
     recordingPath_ = outputPath;
     isRecording_   = true;
-    LOGE("Recording started → %s", outputPath);
+    LOGI("Recording started %dx%d@%d %dbps → %s", width, height, fps, br, outputPath);
+    return true;
 }
 
-void CameraController::stopRecording() {
-    std::lock_guard<std::mutex> lock(frameMtx_);
-    isRecording_ = false;
-    LOGE("Recording stopped");
+void CameraController::stopRecording(std::function<void(const std::string&)> cb) {
+    {
+        std::lock_guard<std::mutex> lock(frameMtx_);
+        if (!isRecording_) {
+            if (cb) cb("");
+            return;
+        }
+        isRecording_ = false;
+    }
+    // Finalize outside the frame lock — encoder drains on its own thread.
+    encoder_.stop(std::move(cb));
+    LOGI("Recording stop requested");
 }
 
 void CameraController::setResolution(int presetIndex) {
