@@ -85,6 +85,14 @@ bool CameraController::openDevice() {
     sessionCb.onClosed  = onCaptureSessionClosed;
 
     ACameraDevice_createCaptureSession(device_, container_, &sessionCb, &session_);
+
+    // Push the per-camera sensor orientation into the GL preview so the
+    // shader rotates upright in portrait. Back lenses are typically 90°
+    // (preview rotation = -90°), front lenses 270° (preview rotation = -270°).
+    if (renderer) {
+        const int orient = sensorOrientationFor(activeCameraId_);
+        setPreviewRotation(renderer, static_cast<float>(-orient));
+    }
     return true;
 }
 
@@ -242,6 +250,23 @@ std::string CameraController::pickCameraByFacing(int facing) {
 
 std::string CameraController::pickBestCamera() {
     return pickCameraByFacing(0);
+}
+
+int CameraController::sensorOrientationFor(const std::string& cameraId) {
+    if (!mgr_ || cameraId.empty()) return 0;
+    ACameraMetadata* meta = nullptr;
+    if (ACameraManager_getCameraCharacteristics(mgr_, cameraId.c_str(), &meta) != ACAMERA_OK
+            || !meta) {
+        return 0;
+    }
+    int orientation = 0;
+    ACameraMetadata_const_entry entry{};
+    if (ACameraMetadata_getConstEntry(meta, ACAMERA_SENSOR_ORIENTATION, &entry) == ACAMERA_OK
+            && entry.count > 0) {
+        orientation = entry.data.i32[0];
+    }
+    ACameraMetadata_free(meta);
+    return orientation;
 }
 
 Resolution CameraController::resolveSupportedSize(const std::string& cameraId,

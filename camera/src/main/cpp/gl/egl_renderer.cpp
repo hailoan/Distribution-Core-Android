@@ -101,6 +101,13 @@ void requestRenderer(EGLRenderer *egl) {
     });
 }
 
+void setPreviewRotation(EGLRenderer *egl, float degrees) {
+    if (egl == nullptr || egl->gl == nullptr) return;
+    egl->thread->runInThread([egl, degrees] {
+        egl->gl->rotation = degrees;
+    });
+}
+
 void
 startInitGL(EGLRenderer *egl, ANativeWindow *window, const char *vertex,
                  const char *fragment) {

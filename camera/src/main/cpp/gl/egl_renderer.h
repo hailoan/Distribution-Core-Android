@@ -57,6 +57,11 @@ void updateFilter(EGLRenderer *egl, const char *vertex, const char *fragment,
 
 void requestRenderer(EGLRenderer *egl);
 
+// Update the preview rotation uniform applied in the fragment shader.
+// Safe to call from any thread; the change is queued onto the EGL thread
+// and picked up by the next renderFrame().
+void setPreviewRotation(EGLRenderer *egl, float degrees);
+
 void
 startInitGL(EGLRenderer *egl, ANativeWindow *window, const char *vertex, const char *fragment);
 

@@ -202,6 +202,10 @@ private:
     // Legacy — defers to pickCameraByFacing(0).
     std::string pickBestCamera();
 
+    // Read ACAMERA_SENSOR_ORIENTATION (0/90/180/270) for the given camera.
+    // Returns 0 if the value cannot be read.
+    int sensorOrientationFor(const std::string& cameraId);
+
     // Resolve a requested (w,h) against the camera's advertised stream
     // configurations. If the exact size is advertised, returns it; else
     // returns the largest advertised YUV_420_888 size ≤ requested (or the
