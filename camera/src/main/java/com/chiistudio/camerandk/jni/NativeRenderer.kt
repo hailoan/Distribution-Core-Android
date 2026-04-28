@@ -32,6 +32,45 @@ object NativeRenderer {
     /** Switch active lens facing. Closes and reopens the camera device. */
     external fun nativeSetLens(lens: Int)
 
+    /**
+     * Tap-to-focus + tap-to-meter at a view-space point. The native side maps
+     * (viewX, viewY) into sensor active-array coordinates accounting for the
+     * sensor orientation and front-lens horizontal mirroring, then issues a
+     * one-shot AF_TRIGGER_START with AF/AE regions set, and resumes the
+     * repeating preview request.
+     *
+     * @param viewX touch X in view pixels
+     * @param viewY touch Y in view pixels
+     * @param viewW view width  in pixels (must be > 0)
+     * @param viewH view height in pixels (must be > 0)
+     */
+    external fun nativeFocusAt(viewX: Float, viewY: Float, viewW: Float, viewH: Float)
+
+    /**
+     * Lock or unlock auto-focus.
+     *  - true  → switches the HAL to AF_MODE_AUTO with TRIGGER_IDLE so the lens
+     *            stays parked at the last converged position.
+     *  - false → restores continuous AF (CONTINUOUS_PICTURE for PHOTO mode,
+     *            CONTINUOUS_VIDEO otherwise).
+     */
+    external fun nativeLockFocus(locked: Boolean)
+
+    /**
+     * Set sensor-level AE exposure compensation in HAL EV steps. Each step is
+     * `AE_COMPENSATION_STEP` of an EV (commonly 1/6 EV). The value is clamped
+     * to the device's reported range — query [nativeGetExposureCompensationRange].
+     *
+     * Distinct from the shader-based brightness in `VideoConfigure` (which is
+     * a post-process gain in [-0.5, 0.5]).
+     */
+    external fun nativeSetExposureCompensation(ev: Int)
+
+    /**
+     * Returns `[min, max]` of AE compensation steps reported by the active
+     * camera. Both are 0 until the camera has been opened.
+     */
+    external fun nativeGetExposureCompensationRange(): IntArray
+
     external fun nativeCleanup()
 
     /**

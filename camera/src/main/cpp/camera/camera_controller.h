@@ -139,6 +139,33 @@ public:
     // index: 0=low  1=medium  2=high  3=ultra
     void setPreviewQuality(int presetIndex);
 
+    // ── Camera control: tap-to-focus / AF lock / AE compensation ─────────────
+
+    // Tap-to-focus + tap-to-meter at a view-space point.
+    // (viewX, viewY) is the touch in view pixels; (viewW, viewH) is the view's
+    // size. The point is mapped into sensor active-array coordinates via the
+    // current sensor orientation (90/270) and front-lens horizontal mirror.
+    // Sets ACAMERA_CONTROL_AF_REGIONS + AE_REGIONS, fires a one-shot
+    // ACAMERA_CONTROL_AF_TRIGGER_START via ACameraCaptureSession_capture,
+    // then resumes the repeating request with the regions still set.
+    void focusAt(float viewX, float viewY, float viewW, float viewH);
+
+    // Lock or unlock focus.
+    //   locked=true  → switch to AF_MODE_AUTO with AF_TRIGGER_IDLE so the lens
+    //                  stays at the last converged position (no further hunts).
+    //   locked=false → restore continuous AF (PICTURE for PHOTO, VIDEO else).
+    void lockFocus(bool locked);
+
+    // Set AE exposure compensation in HAL EV steps (each step = AE_COMPENSATION_STEP).
+    // Value is clamped to ACAMERA_CONTROL_AE_COMPENSATION_RANGE read at openDevice().
+    // Distinct from the shader-based brightness in VideoConfigure — this is the
+    // sensor-level AE bias.
+    void setExposureCompensation(int ev);
+
+    // Reported AE compensation range (HAL steps). Defaults to [0,0] until openDevice().
+    int aeCompensationMin() const { return aeCompMin_; }
+    int aeCompensationMax() const { return aeCompMax_; }
+
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
     bool open(const char* cameraId = nullptr);
@@ -190,6 +217,23 @@ private:
     int          lens_           = 0;      // 0=BACK, 1=FRONT
     std::string  activeCameraId_;
 
+    // ── Cached per-camera characteristics (refreshed on openDevice()) ────────
+    // ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE — left/top/right/bottom in sensor px.
+    int32_t      sensorActive_[4] = { 0, 0, 0, 0 };
+    int          sensorOrientationCached_ = 0;
+    bool         lensIsFront_     = false;
+    // ACAMERA_CONTROL_AE_COMPENSATION_RANGE
+    int          aeCompMin_       = 0;
+    int          aeCompMax_       = 0;
+    int          aeCompCurrent_   = 0;
+
+    // ── Focus state ──────────────────────────────────────────────────────────
+    bool         focusLocked_     = false;
+    // Active AF/AE regions (xmin, ymin, xmax, ymax, weight). 0-count → unset.
+    int32_t      afRegion_[5]     = { 0, 0, 0, 0, 0 };
+    int32_t      aeRegion_[5]     = { 0, 0, 0, 0, 0 };
+    bool         hasAfRegion_     = false;
+
     // Per-(mode, lens) requested resolutions, keyed by (mode, lens) pair.
     std::map<std::pair<int,int>, Resolution> resolutionMap_;
 
@@ -228,6 +272,14 @@ private:
 
     // Apply current quality controls to the capture request
     void applyQualityToRequest();
+
+    // Re-apply cached AF/AE regions + AE compensation + AF mode to request_.
+    // Called whenever request_ is rebuilt (mode/lens/quality switch).
+    void applyControlState();
+
+    // Read sensor active-array size and AE compensation range for the camera id
+    // and cache them onto the *_ members. Cheap; called from openDevice().
+    void cacheCharacteristicsFor(const std::string& cameraId);
 
     // Per-mode frame handling called from handleImage()
     void handlePreviewFrame(AVFrame* frame);

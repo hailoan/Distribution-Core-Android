@@ -211,6 +211,38 @@ Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeStopRecording(
 
 extern "C"
 JNIEXPORT void JNICALL
+Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeFocusAt(
+        JNIEnv * /*env*/, jobject /*thiz*/,
+        jfloat viewX, jfloat viewY, jfloat viewW, jfloat viewH) {
+    g_camera->focusAt(viewX, viewY, viewW, viewH);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeLockFocus(
+        JNIEnv * /*env*/, jobject /*thiz*/, jboolean locked) {
+    g_camera->lockFocus(locked == JNI_TRUE);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeSetExposureCompensation(
+        JNIEnv * /*env*/, jobject /*thiz*/, jint ev) {
+    g_camera->setExposureCompensation(static_cast<int>(ev));
+}
+
+extern "C"
+JNIEXPORT jintArray JNICALL
+Java_com_chiistudio_camerandk_jni_NativeRenderer_nativeGetExposureCompensationRange(
+        JNIEnv *env, jobject /*thiz*/) {
+    jint range[2] = { g_camera->aeCompensationMin(), g_camera->aeCompensationMax() };
+    jintArray arr = env->NewIntArray(2);
+    if (arr) env->SetIntArrayRegion(arr, 0, 2, range);
+    return arr;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
 Java_com_chiistudio_camerandk_jni_NativeRenderer_captureFrame(JNIEnv *env, jobject /*thiz*/,
                                                               jobject callback) {
     if (callback == nullptr || g_jvm == nullptr) return;

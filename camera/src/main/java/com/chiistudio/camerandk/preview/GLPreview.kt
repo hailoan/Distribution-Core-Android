@@ -16,7 +16,7 @@ import com.chiistudio.camerandk.utils.convertBitmapToByteBuffer
 import java.nio.ByteBuffer
 
 @SuppressLint("ViewConstructor")
-open class GLPreview(context: Context) : SurfaceView(context), IFilter,
+open class GLPreview(context: Context) : SurfaceView(context), IFilter, ICameraControl,
     SurfaceHolder.Callback2 {
 
 
@@ -132,6 +132,28 @@ open class GLPreview(context: Context) : SurfaceView(context), IFilter,
             val result = path.takeIf { it.isNotEmpty() }
             mainHandler.post { onStopped(result) }
         }
+    }
+
+    // ── ICameraControl ───────────────────────────────────────────────────────
+
+    override fun focusAt(viewX: Float, viewY: Float) {
+        // width/height are SurfaceView's view-space pixels — what the touch
+        // event reports — so no further DPI conversion is needed.
+        if (width <= 0 || height <= 0) return
+        NativeRenderer.nativeFocusAt(viewX, viewY, width.toFloat(), height.toFloat())
+    }
+
+    override fun lockFocus(locked: Boolean) {
+        NativeRenderer.nativeLockFocus(locked)
+    }
+
+    override fun setBrightness(ev: Int) {
+        NativeRenderer.nativeSetExposureCompensation(ev)
+    }
+
+    override fun exposureCompensationRange(): Pair<Int, Int> {
+        val r = NativeRenderer.nativeGetExposureCompensationRange()
+        return if (r.size >= 2) r[0] to r[1] else 0 to 0
     }
 
     fun captureFrame(onCapture: (Bitmap?) -> Unit) {

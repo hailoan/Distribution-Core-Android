@@ -50,6 +50,9 @@ bool CameraController::openDevice() {
         LOGE("openCamera failed"); return false;
     }
 
+    // Refresh sensor active-array + AE compensation range for the new device.
+    cacheCharacteristicsFor(activeCameraId_);
+
     // Honour the supported-size fallback for the selected camera.
     Resolution resolved = resolveSupportedSize(activeCameraId_, width, height);
     width  = resolved.width;
@@ -78,6 +81,7 @@ bool CameraController::openDevice() {
     ACameraDevice_createCaptureRequest(device_, tmpl, &request_);
     ACaptureRequest_addTarget(request_, target_);
     applyQualityToRequest();
+    applyControlState();
 
     ACameraCaptureSession_stateCallbacks sessionCb{};
     sessionCb.context   = this;
@@ -376,6 +380,7 @@ void CameraController::setMode(CaptureMode mode) {
         ACameraDevice_createCaptureRequest(device_, tmpl, &request_);
         ACaptureRequest_addTarget(request_, target_);
         applyQualityToRequest();
+        applyControlState();
         ACameraCaptureSession_stopRepeating(session_);
         ACameraCaptureSession_setRepeatingRequest(session_, nullptr, 1, &request_, nullptr);
     }
@@ -532,6 +537,7 @@ void CameraController::reopenSession() {
     ACameraDevice_createCaptureRequest(device_, tmpl, &request_);
     ACaptureRequest_addTarget(request_, target_);
     applyQualityToRequest();
+    applyControlState();
 
     ACameraCaptureSession_stateCallbacks sessionCb{};
     sessionCb.context  = this;
@@ -554,6 +560,7 @@ void CameraController::setPreviewQuality(int presetIndex) {
     // Push new controls to camera HAL immediately
     if (request_ && session_) {
         applyQualityToRequest();
+        applyControlState();
         // Re-issue repeating request with updated controls
         ACameraCaptureSession_stopRepeating(session_);
         ACameraCaptureSession_setRepeatingRequest(session_, nullptr, 1, &request_, nullptr);
@@ -582,11 +589,8 @@ void CameraController::applyQualityToRequest() {
     uint8_t awb = ACAMERA_CONTROL_AWB_MODE_AUTO;
     ACaptureRequest_setEntry_u8(request_,
                                 ACAMERA_CONTROL_AWB_MODE, 1, &awb);
-
-    // Continuous auto-focus
-    uint8_t af = ACAMERA_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
-    ACaptureRequest_setEntry_u8(request_,
-                                ACAMERA_CONTROL_AF_MODE, 1, &af);
+    // AF mode is owned by applyControlState() so the caller's lock/unlock
+    // intent (and tap-to-focus regions) survives quality preset changes.
 }
 
 void CameraController::handlePreviewFrame(AVFrame* frame) {
@@ -606,6 +610,181 @@ void CameraController::handleVideoFrame(AVFrame* frame) {
     // plug into your existing MuxerVideo / FFmpeg encode pipeline here
     // e.g.  avcodec_send_frame(encCtx_, frame);
     av_frame_free(&frame);
+}
+
+// ── Camera control: tap-to-focus / AF lock / AE compensation ─────────────────
+
+void CameraController::cacheCharacteristicsFor(const std::string& cameraId) {
+    if (!mgr_ || cameraId.empty()) return;
+    ACameraMetadata* meta = nullptr;
+    if (ACameraManager_getCameraCharacteristics(mgr_, cameraId.c_str(), &meta) != ACAMERA_OK
+            || !meta) {
+        return;
+    }
+
+    ACameraMetadata_const_entry e{};
+
+    // Sensor active array — used for view→sensor coordinate mapping.
+    if (ACameraMetadata_getConstEntry(meta, ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE, &e) == ACAMERA_OK
+            && e.count >= 4) {
+        sensorActive_[0] = e.data.i32[0];
+        sensorActive_[1] = e.data.i32[1];
+        sensorActive_[2] = e.data.i32[2];
+        sensorActive_[3] = e.data.i32[3];
+    }
+
+    // Sensor orientation (cached for focusAt mapping).
+    sensorOrientationCached_ = sensorOrientationFor(cameraId);
+
+    // Lens facing — front lens needs a horizontal flip in the view→sensor map.
+    lensIsFront_ = false;
+    if (ACameraMetadata_getConstEntry(meta, ACAMERA_LENS_FACING, &e) == ACAMERA_OK && e.count > 0) {
+        lensIsFront_ = (e.data.u8[0] == ACAMERA_LENS_FACING_FRONT);
+    }
+
+    // AE compensation range (HAL steps).
+    if (ACameraMetadata_getConstEntry(meta, ACAMERA_CONTROL_AE_COMPENSATION_RANGE, &e) == ACAMERA_OK
+            && e.count >= 2) {
+        aeCompMin_ = e.data.i32[0];
+        aeCompMax_ = e.data.i32[1];
+    } else {
+        aeCompMin_ = 0;
+        aeCompMax_ = 0;
+    }
+    // Clamp any previously-set value into the new range.
+    if (aeCompCurrent_ < aeCompMin_) aeCompCurrent_ = aeCompMin_;
+    if (aeCompCurrent_ > aeCompMax_) aeCompCurrent_ = aeCompMax_;
+
+    ACameraMetadata_free(meta);
+    LOGE("Sensor active=[%d,%d,%d,%d] orient=%d front=%d AE range=[%d,%d]",
+         sensorActive_[0], sensorActive_[1], sensorActive_[2], sensorActive_[3],
+         sensorOrientationCached_, (int)lensIsFront_, aeCompMin_, aeCompMax_);
+}
+
+void CameraController::applyControlState() {
+    if (!request_) return;
+
+    // AF mode: continuous when unlocked (matches mode), AUTO + IDLE when locked.
+    uint8_t afMode;
+    if (focusLocked_) {
+        // AUTO + TRIGGER_IDLE keeps the lens parked at its last converged
+        // position with no further hunts. CONTINUOUS_* would still re-evaluate.
+        afMode = ACAMERA_CONTROL_AF_MODE_AUTO;
+    } else {
+        afMode = (mode_ == CaptureMode::PHOTO)
+                 ? ACAMERA_CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                 : ACAMERA_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
+    }
+    ACaptureRequest_setEntry_u8(request_, ACAMERA_CONTROL_AF_MODE, 1, &afMode);
+
+    uint8_t afTrigger = ACAMERA_CONTROL_AF_TRIGGER_IDLE;
+    ACaptureRequest_setEntry_u8(request_, ACAMERA_CONTROL_AF_TRIGGER, 1, &afTrigger);
+
+    // AF / AE regions if a tap-to-focus has been issued.
+    if (hasAfRegion_) {
+        ACaptureRequest_setEntry_i32(request_, ACAMERA_CONTROL_AF_REGIONS, 5, afRegion_);
+        ACaptureRequest_setEntry_i32(request_, ACAMERA_CONTROL_AE_REGIONS, 5, aeRegion_);
+    }
+
+    // AE compensation in HAL steps.
+    int32_t ev = aeCompCurrent_;
+    ACaptureRequest_setEntry_i32(request_, ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION, 1, &ev);
+}
+
+void CameraController::focusAt(float viewX, float viewY, float viewW, float viewH) {
+    if (!session_ || !request_ || viewW <= 0.f || viewH <= 0.f) return;
+
+    const int32_t saL = sensorActive_[0];
+    const int32_t saT = sensorActive_[1];
+    const int32_t saR = sensorActive_[2];
+    const int32_t saB = sensorActive_[3];
+    const int32_t saW = saR - saL;
+    const int32_t saH = saB - saT;
+    if (saW <= 0 || saH <= 0) return;
+
+    // Normalize touch into [0,1] view-space.
+    float nx = viewX / viewW;
+    float ny = viewY / viewH;
+    if (nx < 0.f) nx = 0.f; else if (nx > 1.f) nx = 1.f;
+    if (ny < 0.f) ny = 0.f; else if (ny > 1.f) ny = 1.f;
+
+    // Front lens preview is mirrored horizontally for the user — undo it.
+    if (lensIsFront_) nx = 1.f - nx;
+
+    // Rotate from view space to sensor space using ACAMERA_SENSOR_ORIENTATION.
+    // The sensor orientation is the clockwise angle the image must be rotated
+    // to appear upright in the view, so going view→sensor rotates the *opposite*
+    // way: 90 → (sx = ny, sy = 1 - nx); 270 → (sx = 1 - ny, sy = nx).
+    float sx, sy;
+    switch (sensorOrientationCached_) {
+        case 90:  sx = ny;        sy = 1.f - nx;  break;
+        case 180: sx = 1.f - nx;  sy = 1.f - ny;  break;
+        case 270: sx = 1.f - ny;  sy = nx;        break;
+        default:  sx = nx;        sy = ny;        break;
+    }
+
+    // ~10% of the sensor short edge → reasonable AF/AE box.
+    const int32_t boxHalf = (saW < saH ? saW : saH) / 20;
+    int32_t cx = saL + (int32_t)(sx * saW);
+    int32_t cy = saT + (int32_t)(sy * saH);
+    int32_t xmin = cx - boxHalf; if (xmin < saL) xmin = saL;
+    int32_t ymin = cy - boxHalf; if (ymin < saT) ymin = saT;
+    int32_t xmax = cx + boxHalf; if (xmax > saR) xmax = saR;
+    int32_t ymax = cy + boxHalf; if (ymax > saB) ymax = saB;
+
+    afRegion_[0] = aeRegion_[0] = xmin;
+    afRegion_[1] = aeRegion_[1] = ymin;
+    afRegion_[2] = aeRegion_[2] = xmax;
+    afRegion_[3] = aeRegion_[3] = ymax;
+    afRegion_[4] = aeRegion_[4] = 1000;  // weight: HAL accepts 0..1000
+    hasAfRegion_ = true;
+
+    // Tap-to-focus implies an explicit re-focus, so unlock if previously locked.
+    focusLocked_ = false;
+
+    // For AF_TRIGGER_START to re-converge, the AF mode must allow it. Use AUTO
+    // for the trigger so the next capture forces a fresh AF cycle, then resume
+    // continuous on the repeating request.
+    uint8_t autoMode = ACAMERA_CONTROL_AF_MODE_AUTO;
+    uint8_t triggerStart = ACAMERA_CONTROL_AF_TRIGGER_START;
+
+    ACaptureRequest_setEntry_u8(request_, ACAMERA_CONTROL_AF_MODE, 1, &autoMode);
+    ACaptureRequest_setEntry_u8(request_, ACAMERA_CONTROL_AF_TRIGGER, 1, &triggerStart);
+    ACaptureRequest_setEntry_i32(request_, ACAMERA_CONTROL_AF_REGIONS, 5, afRegion_);
+    ACaptureRequest_setEntry_i32(request_, ACAMERA_CONTROL_AE_REGIONS, 5, aeRegion_);
+
+    // Submit a single capture to fire the AF_TRIGGER_START edge.
+    ACameraCaptureSession_capture(session_, nullptr, 1, &request_, nullptr);
+
+    // Re-arm the repeating request with continuous AF + regions still set.
+    applyControlState();
+    ACameraCaptureSession_stopRepeating(session_);
+    ACameraCaptureSession_setRepeatingRequest(session_, nullptr, 1, &request_, nullptr);
+
+    LOGE("focusAt view=(%.1f,%.1f)/(%.1f,%.1f) → sensor=[%d,%d,%d,%d]",
+         viewX, viewY, viewW, viewH, xmin, ymin, xmax, ymax);
+}
+
+void CameraController::lockFocus(bool locked) {
+    focusLocked_ = locked;
+    if (!session_ || !request_) return;
+    applyControlState();
+    ACameraCaptureSession_stopRepeating(session_);
+    ACameraCaptureSession_setRepeatingRequest(session_, nullptr, 1, &request_, nullptr);
+    LOGE("lockFocus(%d)", (int)locked);
+}
+
+void CameraController::setExposureCompensation(int ev) {
+    if (ev < aeCompMin_) ev = aeCompMin_;
+    if (ev > aeCompMax_) ev = aeCompMax_;
+    aeCompCurrent_ = ev;
+    if (!session_ || !request_) return;
+
+    int32_t v = aeCompCurrent_;
+    ACaptureRequest_setEntry_i32(request_, ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION, 1, &v);
+    ACameraCaptureSession_stopRepeating(session_);
+    ACameraCaptureSession_setRepeatingRequest(session_, nullptr, 1, &request_, nullptr);
+    LOGE("setExposureCompensation %d (range [%d,%d])", aeCompCurrent_, aeCompMin_, aeCompMax_);
 }
 
 bool CameraController::saveFrameAsJpeg(AVFrame* src, const std::string& path) {
