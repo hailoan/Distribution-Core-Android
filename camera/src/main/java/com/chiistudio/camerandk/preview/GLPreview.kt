@@ -25,7 +25,7 @@ open class GLPreview(context: Context) : SurfaceView(context), IFilter, ICameraC
         .setFragment(
             ShaderBuilder.buildShader(
                 context,
-                pathMain = "glsl/base_fragment_shade_top.glsl",
+                pathMain = "glsl/base_fragment_shade_top_es3.glsl",
                 filter = AssetReader.readString(context, "glsl/frag_filter_none.glsl"),
                 effect = AssetReader.readString(context, "glsl/frag_effect_none.glsl")
             )
@@ -65,7 +65,7 @@ open class GLPreview(context: Context) : SurfaceView(context), IFilter, ICameraC
         builder.setFragment(
             ShaderBuilder.buildShader(
                 context,
-                pathMain = "glsl/base_fragment_shade_top.glsl",
+                pathMain = "glsl/base_fragment_shade_top_es3.glsl",
                 filter = pathFilter ?: AssetReader.readString(
                     context,
                     "glsl/frag_filter_none.glsl"
