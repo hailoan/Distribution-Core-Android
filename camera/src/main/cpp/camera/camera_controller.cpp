@@ -211,13 +211,12 @@ void CameraController::handleImage(AImageReader* reader) {
         renderFrame(renderer, cloned);  // egl_renderer.cpp handles GL thread dispatch
     }
 
-    // In VIDEO mode, also push the frame into the encoder. encodeFrame()
-    // clones internally and drops cleanly when the encoder is backed up,
-    // so this cannot stall the camera callback thread.
-    if (mode_ == CaptureMode::VIDEO && isRecording_ && encoder_.isRunning()) {
-        AVFrame* enc = av_frame_clone(yuv_);
-        encoder_.encodeFrame(enc);
-    }
+    // NOTE: Recording is now driven by the GL render path — see
+    // startRecording(), which arms startRecordCapture() on the EGLRenderer.
+    // The renderer renders the post-filter frame into an offscreen FBO and
+    // hands a YUV420P AVFrame to encoder_.encodeFrame() on the EGL thread,
+    // so the encoded video matches the live preview look. We deliberately
+    // no longer push the unfiltered yuv_ frame into the encoder here.
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -467,6 +466,26 @@ bool CameraController::startRecording(const char* outputPath, int bitrate, int o
     }
     recordingPath_ = outputPath;
     isRecording_   = true;
+
+    // Arm the GL post-filter capture path. Frames arrive on the renderer's
+    // record-encode worker thread (NOT the EGL thread — the heavy sws_scale
+    // is offloaded so it doesn't stall preview). The frame is freshly
+    // allocated and freed by the renderer after the callback returns, so we
+    // must clone before handing it to encodeFrame() (which takes ownership
+    // and frees its input). The first 1-2 ticks may produce no callback
+    // while the PBO ring primes — encoder just starts a couple of frames late.
+    if (renderer) {
+        startRecordCapture(renderer, width, height,
+                           [this](AVFrame *yuv420p) {
+            if (!isRecording_) return;
+            if (!encoder_.isRunning()) return;
+            AVFrame *clone = av_frame_clone(yuv420p);
+            if (clone) encoder_.encodeFrame(clone);
+        });
+    } else {
+        LOGE("startRecording: no GL renderer attached — encoder will receive no frames");
+    }
+
     LOGI("Recording started %dx%d@%d %dbps rot=%d → %s",
          width, height, fps, br, orientation, outputPath);
     return true;
@@ -480,6 +499,11 @@ void CameraController::stopRecording(std::function<void(const std::string&)> cb)
             return;
         }
         isRecording_ = false;
+    }
+    // Disarm the GL capture path before draining the encoder so no further
+    // frames hit encodeFrame() after stop().
+    if (renderer) {
+        stopRecordCapture(renderer);
     }
     // Finalize outside the frame lock — encoder drains on its own thread.
     encoder_.stop(std::move(cb));

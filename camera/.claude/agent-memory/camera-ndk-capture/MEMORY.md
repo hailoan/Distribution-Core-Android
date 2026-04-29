@@ -1,2 +1,3 @@
 - [Pipeline shape for capture hooks](project_pipeline_shape.md) — where renderFrame, EGL thread, and JNI singletons sit; governs capture hook placement
 - [Control state pattern](project_camera_control_layout.md) — sticky AF/AE/EV writes must go through applyControlState() because request_ is rebuilt on mode/lens/quality switch
+- [Recording path is GL-driven](project_recording_path.md) — VideoEncoder is fed by FBO+PBO readback inside renderFrame, not by the camera callback
