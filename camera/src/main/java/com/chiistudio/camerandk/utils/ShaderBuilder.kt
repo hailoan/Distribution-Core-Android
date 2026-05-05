@@ -12,8 +12,8 @@ object ShaderBuilder {
     ): String {
         val builder = StringBuilder()
         builder.append(AssetReader.readString(context, pathMain))
-        builder.append(AssetReader.readString(context, "glsl/frag_base_shader_blend_es3.glsl"))
-        builder.append(AssetReader.readString(context, "glsl/frag_base_shader_adjust_es3.glsl"))
+        builder.append(AssetReader.readString(context, "glsl/frag_base_shader_blend.glsl"))
+        builder.append(AssetReader.readString(context, "glsl/frag_base_shader_adjust.glsl"))
         builder.append(filter)
         builder.append(effect)
         val main = """
