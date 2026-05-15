@@ -19,6 +19,7 @@ object ShaderBuilder {
         val main = """
             void main(){
                 vec2 uv = scaleTexture(v_texCoord, u_scale);
+                v_scale_rotate = uv;
                 vec4 color;
                 if (uv.x < 0.0 || uv.x > 1.0 || uv.y<0.0 ||uv.y>1.0){
                     color = vec4(0.0, 0.0, 0.0, 1.0);

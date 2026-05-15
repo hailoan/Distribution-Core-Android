@@ -78,7 +78,7 @@ uniform vec3 u_balance_shadow;
 uniform vec3 u_balance_highlight;
 uniform vec3 u_balance_midtones;
 uniform float u_rotation;
-
+vec2 v_scale_rotate;
 in vec2 v_texCoord;
 out vec4 fragColor;
 float current_hue;
