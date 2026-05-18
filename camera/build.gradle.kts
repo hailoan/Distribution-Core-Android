@@ -19,10 +19,8 @@ android {
         ndk {
             //CJT
             abiFilters.apply {
-                add("armeabi-v7a")
                 add("arm64-v8a")
-                add("x86")
-                add("x86_64")
+                add("armeabi-v7a")
             }
         }
 
