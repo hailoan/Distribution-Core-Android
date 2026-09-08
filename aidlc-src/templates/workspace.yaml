@@ -1,5 +1,5 @@
 name: {{WORKSPACE_NAME}}
-version: "4.0"
+version: "5.0"
 
 # Agents consume a compact stage packet, load only applicable skills, and write one primary
 # artifact. `skills` are always-needed; `conditional_skills` are routed by the agent body.
@@ -8,7 +8,7 @@ agents:
 
   - id: discovery
     name: Flow Discovery
-    skills: [codebase-search, dependency-analysis]
+    skills: [module-impact-analysis, codebase-search, dependency-analysis]
     conditional_skills: [architecture-analysis, api-analysis]
     model: {{MODEL_HEAVY}}
     position: Senior Android Developer
@@ -17,7 +17,7 @@ agents:
 
   - id: feature-analysis
     name: Feature Analysis
-    skills: [ticket-reading]
+    skills: [ticket-reading, module-impact-analysis]
     conditional_skills: [dev-spec-validation, feature-clarification, codebase-search, api-analysis, figma-fetch, design-intent-analysis, reuse-detection, dependency-analysis, risk-analysis]
     model: {{MODEL_HEAVY}}
     position: Developer
@@ -26,7 +26,7 @@ agents:
 
   - id: bug-investigation
     name: Bug Investigation
-    skills: [ticket-reading]
+    skills: [ticket-reading, module-impact-analysis]
     conditional_skills: [bug-root-cause, codebase-search, dependency-analysis, regression-analysis, risk-analysis]
     model: {{MODEL_HEAVY}}
     position: Developer
@@ -35,8 +35,8 @@ agents:
 
   - id: solution-design
     name: Solution Design
-    skills: []
-    conditional_skills: [figma-fetch, architecture-analysis, reuse-detection, api-analysis, dependency-analysis, risk-analysis]
+    skills: [module-impact-analysis]
+    conditional_skills: [figma-fetch, architecture-analysis, reuse-detection, api-analysis, dependency-analysis, risk-analysis, native-boundary-guideline, gradle-module-guideline, ffmpeg-guideline, opengles-guideline, ndk-cpp-guideline]
     model: {{MODEL_HEAVY}}
     position: Android Architect
     description: Turn an approved DEV-SPEC into traceable behavior and architecture.
@@ -44,8 +44,8 @@ agents:
 
   - id: implementation-plan
     name: Implementation Plan
-    skills: [planning]
-    conditional_skills: [dependency-analysis, risk-analysis]
+    skills: [planning, module-impact-analysis]
+    conditional_skills: [dependency-analysis, risk-analysis, native-boundary-guideline, gradle-module-guideline, ffmpeg-guideline, opengles-guideline, ndk-cpp-guideline]
     model: {{MODEL_MID}}
     position: Tech Lead
     description: Produce a dependency-ordered, traceable implementation plan.
@@ -53,8 +53,8 @@ agents:
 
   - id: android-dev
     name: Android Developer
-    skills: []
-    conditional_skills: [reuse-detection, compose-guideline, room-guideline, paging-guideline]
+    skills: [module-impact-analysis]
+    conditional_skills: [reuse-detection, compose-guideline, room-guideline, paging-guideline, native-boundary-guideline, gradle-module-guideline, ffmpeg-guideline, opengles-guideline, ndk-cpp-guideline]
     model: {{MODEL_MID}}
     position: Senior Android Developer
     description: Implement approved tasks, loading only the platform guidance each task needs.
@@ -62,12 +62,21 @@ agents:
 
   - id: testing
     name: Testing
-    skills: [regression-analysis]
+    skills: [module-impact-analysis, regression-analysis]
     conditional_skills: []
     model: {{MODEL_MID}}
     position: QA Automation Engineer
     description: Add deterministic tests and report execution separately from authored coverage.
     artifact: output/<ticket>/UNIT-TEST-REPORT.md
+
+  - id: integration-testing
+    name: Module Integration Test
+    skills: [module-impact-analysis, regression-analysis]
+    conditional_skills: [native-boundary-guideline, gradle-module-guideline, ffmpeg-guideline, opengles-guideline, ndk-cpp-guideline]
+    model: {{MODEL_MID}}
+    position: Senior Integration Engineer
+    description: Verify changed modules, crossed contracts, and the affected consumer closure.
+    artifact: output/<ticket>/INTEGRATION-TEST-REPORT.md
 
   - id: qa-plan
     name: QA Test Plan
@@ -89,8 +98,8 @@ agents:
 
   - id: review
     name: Review
-    skills: [review-checklist]
-    conditional_skills: [architecture-analysis, regression-analysis, risk-analysis]
+    skills: [review-checklist, module-impact-analysis]
+    conditional_skills: [architecture-analysis, regression-analysis, risk-analysis, native-boundary-guideline, gradle-module-guideline, ffmpeg-guideline, opengles-guideline, ndk-cpp-guideline]
     model: {{MODEL_HEAVY}}
     position: Principal Android Engineer
     description: Review the actual diff, trace requirements and tests, and issue a Go/No-Go verdict.
@@ -108,6 +117,18 @@ skills:
     path: ./.aidlc/skills/reuse-detection.md
   - id: dependency-analysis
     path: ./.aidlc/skills/dependency-analysis.md
+  - id: module-impact-analysis
+    path: ./.aidlc/skills/module-impact-analysis.md
+  - id: native-boundary-guideline
+    path: ./.aidlc/skills/native-boundary-guideline.md
+  - id: gradle-module-guideline
+    path: ./.aidlc/skills/gradle-module-guideline.md
+  - id: ffmpeg-guideline
+    path: ./.aidlc/skills/ffmpeg-guideline.md
+  - id: opengles-guideline
+    path: ./.aidlc/skills/opengles-guideline.md
+  - id: ndk-cpp-guideline
+    path: ./.aidlc/skills/ndk-cpp-guideline.md
   - id: risk-analysis
     path: ./.aidlc/skills/risk-analysis.md
   - id: api-analysis
@@ -165,6 +186,9 @@ slash_commands:
   - name: /ut
     agent: testing
 
+  - name: /it
+    agent: integration-testing
+
   - name: /qa-plan
     agent: qa-plan
 
@@ -190,7 +214,7 @@ pipelines:
   # requirement / design (intent) / api / codebase evidence, merged into a slim DEV-SPEC.md.
   # solution-design turns the spec into architecture, flows, and acceptance criteria (and
   # fetches the Figma frame JSON when the ticket has a design); implementation-plan and
-  # android-dev consumes it; testing then review close the loop.
+  # android-dev consumes it; focused testing, module integration, and review close the loop.
   - id: impl-flow
     name: Implement
     steps:
@@ -240,12 +264,13 @@ pipelines:
         human_review: false
         auto_review: true
 
-      - agent: automation-test
+      - agent: integration-testing
         enabled: true
         requires:
           - output/<ticket>/CHANGESET.md
+          - output/<ticket>/UNIT-TEST-REPORT.md
         produces:
-          - output/<ticket>/AUTOMATION-TEST-REPORT.md
+          - output/<ticket>/INTEGRATION-TEST-REPORT.md
         human_review: false
         auto_review: true
 
@@ -254,7 +279,7 @@ pipelines:
         requires:
           - output/<ticket>/CHANGESET.md
           - output/<ticket>/UNIT-TEST-REPORT.md
-          - output/<ticket>/AUTOMATION-TEST-REPORT.md  # verify instrumented / UI coverage
+          - output/<ticket>/INTEGRATION-TEST-REPORT.md # verify module/consumer contracts
           - output/<ticket>/IMPLEMENT-PLAN.md      # review the change against the approved plan
           - output/<ticket>/SOLUTION-DESIGN.md     # verify acceptance criteria
         produces:
@@ -318,7 +343,7 @@ pipelines:
 
   # Fix a bug — bug-investigation uses one isolated context for the report/logs/trace + codebase,
   # then records a diagnosis and, only when confirmed, fix/testing tasks. Android-dev applies the
-  # fix, then testing + review verify it.
+  # fix, then focused testing + module integration + review verify it.
   - id: fixbug-flow
     name: Fix Bug Flow
     steps:
@@ -349,11 +374,22 @@ pipelines:
         human_review: false
         auto_review: true
 
+      - agent: integration-testing
+        enabled: true
+        requires:
+          - output/<ticket>/CHANGESET.md
+          - output/<ticket>/UNIT-TEST-REPORT.md
+        produces:
+          - output/<ticket>/INTEGRATION-TEST-REPORT.md
+        human_review: false
+        auto_review: true
+
       - agent: review
         enabled: true
         requires:
           - output/<ticket>/CHANGESET.md
           - output/<ticket>/UNIT-TEST-REPORT.md
+          - output/<ticket>/INTEGRATION-TEST-REPORT.md
           - output/<ticket>/BUG-INVESTIGATION.md
         produces:
           - output/<ticket>/CODE-REVIEW.md

@@ -1,0 +1,50 @@
+{
+  "version": "3.0",
+  "flows": {
+    "impl-flow": [
+      { "agent": "feature-analysis", "command": "/study", "skill": "feature-analysis", "reads": [], "artifact": "DEV-SPEC.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false },
+      { "agent": "solution-design", "command": "/design", "skill": "solution-design", "reads": ["DEV-SPEC.md"], "artifact": "SOLUTION-DESIGN.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false },
+      { "agent": "implementation-plan", "command": "/task", "skill": "implementation-plan", "reads": ["SOLUTION-DESIGN.md"], "artifact": "IMPLEMENT-PLAN.md", "model": "sonnet", "execution": "subagent", "fanout": false, "human_review": false },
+      { "agent": "android-dev", "command": "/implement", "skill": "android-dev", "reads": ["IMPLEMENT-PLAN.md", "SOLUTION-DESIGN.md"], "artifact": "CHANGESET.md", "model": "sonnet", "execution": "subagent", "fanout": true, "human_review": false },
+      { "agent": "testing", "command": "/ut", "skill": "testing", "reads": ["CHANGESET.md"], "artifact": "UNIT-TEST-REPORT.md", "model": "sonnet", "execution": "subagent", "fanout": true, "human_review": false },
+      { "agent": "integration-testing", "command": "/it", "skill": "integration-testing", "reads": ["CHANGESET.md", "UNIT-TEST-REPORT.md"], "artifact": "INTEGRATION-TEST-REPORT.md", "model": "sonnet", "execution": "subagent", "fanout": true, "human_review": false },
+      { "agent": "review", "command": "/aidlc-review", "skill": "review", "reads": ["CHANGESET.md", "UNIT-TEST-REPORT.md", "INTEGRATION-TEST-REPORT.md", "IMPLEMENT-PLAN.md", "SOLUTION-DESIGN.md"], "artifact": "CODE-REVIEW.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false }
+    ],
+    "auto-feature-flow": [
+      { "agent": "feature-analysis", "command": "/study", "skill": "feature-analysis", "reads": [], "artifact": "DEV-SPEC.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false },
+      { "agent": "solution-design", "command": "/design", "skill": "solution-design", "reads": ["DEV-SPEC.md"], "artifact": "SOLUTION-DESIGN.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false },
+      { "agent": "implementation-plan", "command": "/task", "skill": "implementation-plan", "reads": ["SOLUTION-DESIGN.md"], "artifact": "IMPLEMENT-PLAN.md", "model": "sonnet", "execution": "subagent", "fanout": false, "human_review": false },
+      { "agent": "android-dev", "command": "/implement", "skill": "android-dev", "reads": ["IMPLEMENT-PLAN.md", "SOLUTION-DESIGN.md"], "artifact": "CHANGESET.md", "model": "sonnet", "execution": "subagent", "fanout": true, "human_review": false }
+    ],
+    "discover-flow": [
+      { "agent": "discovery", "command": "/discover", "skill": "discovery", "reads": [], "artifact": "FLOW-DISCOVERY.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false }
+    ],
+    "fixbug-flow": [
+      { "agent": "bug-investigation", "command": "/fixbug", "skill": "bug-investigation", "reads": [], "artifact": "BUG-INVESTIGATION.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false },
+      { "agent": "android-dev", "command": "/implement", "skill": "android-dev", "reads": ["BUG-INVESTIGATION.md"], "artifact": "CHANGESET.md", "model": "sonnet", "execution": "subagent", "fanout": true, "human_review": false },
+      { "agent": "testing", "command": "/ut", "skill": "testing", "reads": ["CHANGESET.md"], "artifact": "UNIT-TEST-REPORT.md", "model": "sonnet", "execution": "subagent", "fanout": true, "human_review": false },
+      { "agent": "integration-testing", "command": "/it", "skill": "integration-testing", "reads": ["CHANGESET.md", "UNIT-TEST-REPORT.md"], "artifact": "INTEGRATION-TEST-REPORT.md", "model": "sonnet", "execution": "subagent", "fanout": true, "human_review": false },
+      { "agent": "review", "command": "/aidlc-review", "skill": "review", "reads": ["CHANGESET.md", "UNIT-TEST-REPORT.md", "INTEGRATION-TEST-REPORT.md", "BUG-INVESTIGATION.md"], "artifact": "CODE-REVIEW.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false }
+    ],
+    "fixcrash-flow": [
+      { "agent": "bug-investigation", "command": "/fixbug", "skill": "bug-investigation", "reads": [], "artifact": "BUG-INVESTIGATION.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false },
+      { "agent": "android-dev", "command": "/implement", "skill": "android-dev", "reads": ["BUG-INVESTIGATION.md"], "artifact": "CHANGESET.md", "model": "sonnet", "execution": "subagent", "fanout": true, "human_review": false }
+    ],
+    "auto-bug-flow": [
+      { "agent": "bug-investigation", "command": "/fixbug", "skill": "bug-investigation", "reads": [], "artifact": "BUG-INVESTIGATION.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false },
+      { "agent": "android-dev", "command": "/implement", "skill": "android-dev", "reads": ["BUG-INVESTIGATION.md"], "artifact": "CHANGESET.md", "model": "sonnet", "execution": "subagent", "fanout": true, "human_review": false }
+    ],
+    "automation-test-flow": [
+      { "agent": "automation-test", "command": "/autotest", "skill": "automation-test", "reads": ["CHANGESET.md"], "artifact": "AUTOMATION-TEST-REPORT.md", "model": "sonnet", "execution": "subagent", "fanout": true, "human_review": false }
+    ],
+    "qa-flow": [
+      { "agent": "feature-analysis", "command": "/study", "skill": "feature-analysis", "reads": [], "artifact": "DEV-SPEC.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false },
+      { "agent": "qa-plan", "command": "/qa-plan", "skill": "qa-plan", "reads": ["DEV-SPEC.md"], "artifact": "TEST-CASES.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false },
+      { "agent": "automation-test", "command": "/autotest", "skill": "automation-test", "reads": ["TEST-CASES.md"], "artifact": "AUTOMATION-TEST-REPORT.md", "model": "sonnet", "execution": "subagent", "fanout": true, "human_review": false },
+      { "agent": "review", "command": "/aidlc-review", "skill": "review", "reads": ["AUTOMATION-TEST-REPORT.md", "TEST-CASES.md", "DEV-SPEC.md"], "artifact": "CODE-REVIEW.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false }
+    ],
+    "techlead-review-flow": [
+      { "agent": "review", "command": "/aidlc-review", "skill": "review", "reads": [], "artifact": "CODE-REVIEW.md", "model": "opus", "execution": "subagent", "fanout": false, "human_review": false }
+    ]
+  }
+}

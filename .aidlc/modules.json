@@ -1,0 +1,196 @@
+{
+  "version": "1.0",
+  "project": "Distribution Core Android",
+  "source": "aidlc.project.json",
+  "quality": {
+    "requireModuleImpact": true,
+    "requireIntegrationGateFor": [
+      "cross-module",
+      "public-contract",
+      "native-boundary",
+      "build-logic",
+      "consumer-wiring"
+    ],
+    "maxAutonomousRepairCycles": 2
+  },
+  "modules": [
+    {
+      "id": "app",
+      "gradlePath": ":app",
+      "kind": "android-application",
+      "namespace": "com.chiistudio.library",
+      "role": "sample host and library integration surface",
+      "status": "active-demo",
+      "roots": [
+        "app/"
+      ],
+      "dependsOn": [
+        "network"
+      ],
+      "dependencySemantics": "project-dependency",
+      "publicContract": false,
+      "externalConsumers": false,
+      "verification": [
+        ":app:assembleDebug"
+      ],
+      "riskTags": [
+        "host-integration",
+        "benchmark-target"
+      ]
+    },
+    {
+      "id": "core",
+      "gradlePath": ":core",
+      "kind": "android-library",
+      "namespace": "com.chiistudio.core",
+      "role": "coroutine MVVM/state and synchronization primitives",
+      "status": "active-library",
+      "roots": [
+        "core/"
+      ],
+      "dependsOn": [],
+      "dependencySemantics": "project-dependency",
+      "publicContract": true,
+      "externalConsumers": true,
+      "verification": [
+        ":core:testDebugUnitTest",
+        ":core:assembleDebug"
+      ],
+      "riskTags": [
+        "public-api",
+        "concurrency",
+        "publication"
+      ]
+    },
+    {
+      "id": "network",
+      "gradlePath": ":network",
+      "kind": "android-library",
+      "namespace": "com.chiistudio.network",
+      "role": "Ktor/OkHttp clients, authentication hooks, retry, and Hilt wiring",
+      "status": "active-scaffold",
+      "roots": [
+        "network/"
+      ],
+      "dependsOn": [],
+      "dependencySemantics": "project-dependency",
+      "publicContract": true,
+      "externalConsumers": "unknown",
+      "verification": [
+        ":network:testDebugUnitTest",
+        ":network:assembleDebug",
+        ":app:assembleDebug"
+      ],
+      "riskTags": [
+        "public-api",
+        "authentication",
+        "sensitive-logging",
+        "di",
+        "concurrency"
+      ]
+    },
+    {
+      "id": "camera",
+      "gradlePath": ":camera",
+      "kind": "android-native-library",
+      "namespace": "com.chiistudio.camerandk",
+      "role": "Camera2 NDK, JNI, EGL/GLES filters, snapshots, and MP4 recording",
+      "status": "active-library",
+      "roots": [
+        "camera/"
+      ],
+      "dependsOn": [],
+      "dependencySemantics": "project-dependency",
+      "publicContract": true,
+      "externalConsumers": true,
+      "verification": [
+        ":camera:assembleDebug",
+        "supported-device camera smoke test",
+        "supported-ABI native load test"
+      ],
+      "riskTags": [
+        "public-api",
+        "jni",
+        "native-lifecycle",
+        "threading",
+        "egl",
+        "camera2",
+        "media-codec",
+        "abi",
+        "publication"
+      ]
+    },
+    {
+      "id": "videolib",
+      "gradlePath": ":videolib",
+      "kind": "android-native-library",
+      "namespace": "com.cii.videolib",
+      "role": "video library scaffold with a JNI/CMake native stub",
+      "status": "scaffold",
+      "roots": [
+        "videolib/"
+      ],
+      "dependsOn": [],
+      "dependencySemantics": "project-dependency",
+      "publicContract": true,
+      "externalConsumers": "unknown",
+      "verification": [
+        ":videolib:assembleDebug"
+      ],
+      "riskTags": [
+        "new-contract",
+        "sdk-exception",
+        "jni",
+        "abi"
+      ]
+    },
+    {
+      "id": "benchmark",
+      "gradlePath": ":benchmark",
+      "kind": "android-test",
+      "namespace": "com.example.benchmark",
+      "role": "macrobenchmark consumer targeting the app benchmark variant",
+      "status": "active-test",
+      "roots": [
+        "benchmark/"
+      ],
+      "dependsOn": [
+        "app"
+      ],
+      "dependencySemantics": "benchmark-target",
+      "publicContract": false,
+      "externalConsumers": false,
+      "verification": [
+        ":benchmark:connectedBenchmarkAndroidTest"
+      ],
+      "riskTags": [
+        "device-required",
+        "package-contract"
+      ]
+    },
+    {
+      "id": "plugin",
+      "gradlePath": ":plugin",
+      "kind": "gradle-plugin",
+      "namespace": "com.chiistudio.plugin",
+      "role": "publication convention plugin",
+      "status": "active-build-logic",
+      "roots": [
+        "plugin/"
+      ],
+      "dependsOn": [],
+      "dependencySemantics": "project-dependency",
+      "publicContract": true,
+      "externalConsumers": true,
+      "verification": [
+        ":plugin:validatePlugins",
+        ":plugin:test"
+      ],
+      "riskTags": [
+        "build-logic",
+        "publication",
+        "credentials"
+      ]
+    }
+  ]
+}

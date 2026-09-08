@@ -1,76 +1,103 @@
-# Planning Skill
-
-You are a Tech Lead on **Distribution-Core-Android**.
-
-Input: `output/SOLUTION-DESIGN.md`
-
+---
+name: Planning
+description: During implementation-plan, turn an approved design into traceable vertical work items, small execution-ready owned tasks, and dependency waves; add agile delivery metadata only when requested; write nothing.
 ---
 
-## Module ownership
+## Planning
 
-| Module | What typically changes here |
-|---|---|
-| `:core` | `BaseViewModel` contract, `ReentrantMutex`, `BaseAdapter` |
-| `:network` | New API service (4-class chain + Hilt module), `ITokenManager`/`IRetryToken` impl, `InitNetwork` field |
-| `:camera` (Kotlin) | `NativeRenderer` new `external fun`, `GLPreview` new Kotlin API, `AdjustType`/`VideoConfigure` new uniform |
-| `:camera` (NDK/C++) | `camera_native.cpp` JNI entry, `CameraController` feature, `EGLRenderer` GL pipeline, `VideoGl` uniform, GLSL shader |
-| `:camera` (FFmpeg) | `VideoEncoder` changes, new FFmpeg API use — check ABI lib is already in `ffmpegv2/{abi}/` |
-| `:plugin` | Publish coordinates, Maven repo config |
-| `:app` | Sample / demo code |
+Read the approved SOLUTION-DESIGN plus the module, architecture, DI, risk, and naming topics
+already present in the stage packet. Do not open the source context files. Plan
+implementation only; surface unresolved design decisions instead of making them.
 
----
+### Define work items
 
-## Shared infrastructure — flag these tasks separately
+- The ticket is the parent scope. A work item delivers one testable outcome as a vertical slice;
+  use a Story-ID and formal user-story wording only when the source or requested delivery mode uses
+  stories. It may touch multiple layers and modules; list every module. Never split it merely by
+  layer or module.
+- Tasks are the necessary module/contract/behavior/test steps inside a work item. Give each exactly
+  one owner stage: `android-dev` for production/resources/config, `testing` for test source, or
+  `integration-testing` for dependency-closure compile/package/device verification. Omit boundaries
+  the slice does not need.
+- Make each task one coherent implementation or verification step that can complete one
+  `implement -> inspect diff -> static verify -> record` loop. A task may touch multiple tightly
+  coupled files, but must not combine independently executable boundaries merely to shorten the
+  backlog.
+- For each task, name exact existing paths and symbols. For implementation-local new files, a
+  bounded planned package and responsibility is sufficient when the design intentionally leaves
+  the filename unspecified. Use a narrow path pattern only when every matching file is owned.
+- State the task objective, preconditions/inputs, observable done condition, verification evidence
+  or linked Test-ID, dependencies, and a collision key for any shared file or boundary.
+- Split production implementation from test-source authoring because they have different owner
+  stages. Link them through Test-ID and dependencies; do not ask android-dev to write tests owned
+  by `testing`.
+- Add a foundation work item only when multiple outcomes truly require the same prerequisite contract
+  and no user-visible slice can own it safely.
+- Add an integration work item when independently deliverable slices need final wiring, or whenever
+  a cross-module, public/native/build, or consumer contract requires closure verification.
+- Add a timeboxed spike only when evidence is insufficient to estimate.
 
-| Infrastructure | Impact |
-|---|---|
-| `BaseViewModel` contract change | All ViewModels in `:app` and downstream consumers must be updated |
-| `InitNetwork` new field | Consumers must set it in `Application.onCreate()` before Hilt graph |
-| New Hilt `@Qualifier` | Must be declared in the owning module's DI package |
-| `libs.versions.toml` change | Affects all modules; coordinate carefully |
-| Room schema change | Requires `Migration` — cannot be skipped |
-| `CMakeLists.txt` new source file | Must be added to `add_library(camera SHARED ...)` |
-| New `external fun` in `NativeRenderer` | Requires matching JNI entry in `camera_native.cpp` |
-| New GLSL uniform | Requires matching `cU*` constant + `GLint u*` member in `VideoGl`, `glGetUniformLocation` call, and upload in `video_gl.cpp` |
-| New FFmpeg API | Check pre-compiled lib exists in `ffmpegv2/{abi}/` for **all four ABIs** (arm64-v8a, armeabi-v7a, x86, x86_64) |
-| New module | Must be added to `settings.gradle.kts` `include(":newmodule")` |
-| `consumer-rules.pro` | Update when new public API is added |
+Prefer a thin, demoable walking skeleton first when it can safely prove the end-to-end path.
+Otherwise order the smallest viable slice first.
 
----
+### Decompose work items into executable tasks
 
-## `:camera` task layering order
-When adding a camera feature, implement in this order:
-1. Define C++ interface in the appropriate header (`.h`)
-2. Implement in `.cpp` — camera NDK / EGL / FFmpeg
-3. Add JNI entry in `camera_native.cpp`
-4. Declare `external fun` in `NativeRenderer.kt`
-5. Expose via `GLPreview` Kotlin API
-6. Update `CameraBuilder` / `VideoConfigure` / `AdjustType` if configurable
+Walk the approved behavior from its innermost required contract to integration and create only the
+steps the slice actually needs. Typical boundaries include contract/model, data implementation,
+state holder, UI/resources, DI registration, navigation/integration, and test coverage, but these
+are prompts for inspection—not mandatory layers or permission to redesign.
 
----
+Split a task when any of these is true:
 
-## Responsibilities
-- Break feature into tasks scoped to the correct module and layer
-- Estimate complexity in story points (1 / 2 / 3 / 5 / 8)
-- Define implementation order: data layer → domain → UI; for camera: C++ → JNI → Kotlin API → consumer
-- Identify tasks that can run in parallel vs. must be sequential
-- Flag every shared infrastructure impact listed above
+- it has more than one independently verifiable objective;
+- it crosses owner stages;
+- part of it can run concurrently with the rest;
+- it edits shared DI, native/JNI, navigation, shared state, public API, publication, or build
+  configuration together with otherwise isolated module work;
+- its done condition would be vague (for example, "feature works") rather than observable;
+- android-dev would need to choose an unstated contract, behavior, path, or technology.
 
----
+Do not split mechanically by file or force one task per layer. Keep files that must change
+atomically together, such as a contract and its required signature updates. If exact scope cannot
+be determined from the approved design and bounded code inspection, record an unresolved planning
+input or a timeboxed spike; never disguise discovery as an implementation task.
 
-## Output format — save to `output/IMPLEMENT-PLAN.md`
-1. Task Breakdown (module, layer, description, story points)
-2. Dependency Map
-3. Milestones
-4. Shared Infrastructure Impact
-5. Technical Checklist:
-   - Room migration needed?
-   - New Hilt `@Module` or `@Qualifier`?
-   - New `InitNetwork` field?
-   - `libs.versions.toml` update?
-   - `settings.gradle.kts` `include()` for new module?
-   - New `external fun` + JNI entry in `camera_native.cpp`?
-   - New GLSL uniform in shader + `VideoGl` + `video_gl.cpp`?
-   - New `.cpp` file added to `CMakeLists.txt add_library`?
-   - FFmpeg lib exists in all four ABIs?
-   - `consumer-rules.pro` update?
+### Optional delivery-backlog mode
+
+Only when the user requests agile delivery metadata:
+
+- map stable `Story-ID` to `FR-ID`, `SC-ID`, and `AC-ID`;
+- write `As a … I want … so that …` and Given/When/Then acceptance criteria when meaningful;
+- record modules, tasks, inputs/outputs, dependencies, MoSCoW priority, and Fibonacci points;
+- keep it independent, valuable, estimable, sprint-sized, and testable.
+
+Use the team's supplied estimation scale and capacity. Do not invent points, priority, or a
+five-point split rule when the project has not supplied them. Never split by technical layer.
+
+Resolve apparent screen/module tension in favor of the user outcome: split separate outcomes or
+screens when independently demoable, but allow one outcome to cross required modules.
+
+### Order execution
+
+Build a dependency DAG from verified module/consumer contracts and shared-file touchpoints. Order
+producer contract changes before consumers, tests, and integration checks. Place a work item in a
+wave only after all dependencies are satisfied. Also order tasks inside each story and across
+stories. Mark within-wave concurrency only when exact path/symbol ownership and collision keys do
+not overlap; serialize actual shared infrastructure changes. Do not force a foundation first or
+integration last when neither is needed.
+
+Pack waves into sprints only when sprint packing is requested and capacity is supplied. Otherwise
+omit sprint assignments entirely; the execution waves are sufficient.
+
+Return:
+
+- Work-item Backlog:
+  `FR-ID | SC-ID | AC-ID | Work-ID/Story-ID | outcome | Screens/Modules | Depends-on`; add user-story wording, G/W/T, Points, MoSCoW, and Sprint only in requested delivery-backlog mode with supplied inputs;
+- Task Backlog:
+  `Task-ID | Story-ID | owning module | owner stage | objective | exact path/symbol scope | preconditions/inputs | done condition | verification/Test-ID/Check-ID | depends on | collision key`;
+- Module Integration Matrix:
+  `Check-ID | changed module | affected consumer/external contract | boundary | command or device/manual check | reason | integration-testing owner task`;
+- Dependency Map;
+- Execution Waves listing task IDs with concurrency/serialization and file-ownership reasons;
+- Sprint Plan only when packing was requested and capacity was supplied;
+- unresolved planning inputs.

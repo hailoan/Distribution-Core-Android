@@ -15,9 +15,10 @@ implementation only; surface unresolved design decisions instead of making them.
   use a Story-ID and formal user-story wording only when the source or requested delivery mode uses
   stories. It may touch multiple layers and modules; list every module. Never split it merely by
   layer or module.
-- Tasks are the necessary data/domain/state/UI/DI/test steps inside a work item. Give each exactly one
-  owner stage: `android-dev` for production/resources/config, or `testing` for test source. Omit
-  layers the slice does not need.
+- Tasks are the necessary module/contract/behavior/test steps inside a work item. Give each exactly
+  one owner stage: `android-dev` for production/resources/config, `testing` for test source, or
+  `integration-testing` for dependency-closure compile/package/device verification. Omit boundaries
+  the slice does not need.
 - Make each task one coherent implementation or verification step that can complete one
   `implement -> inspect diff -> static verify -> record` loop. A task may touch multiple tightly
   coupled files, but must not combine independently executable boundaries merely to shorten the
@@ -32,8 +33,8 @@ implementation only; surface unresolved design decisions instead of making them.
   by `testing`.
 - Add a foundation work item only when multiple outcomes truly require the same prerequisite contract
   and no user-visible slice can own it safely.
-- Add an integration work item only when independently deliverable slices need cross-screen,
-  navigation, shared-state, socket, or other final wiring.
+- Add an integration work item when independently deliverable slices need final wiring, or whenever
+  a cross-module, public/native/build, or consumer contract requires closure verification.
 - Add a timeboxed spike only when evidence is insufficient to estimate.
 
 Prefer a thin, demoable walking skeleton first when it can safely prove the end-to-end path.
@@ -51,8 +52,8 @@ Split a task when any of these is true:
 - it has more than one independently verifiable objective;
 - it crosses owner stages;
 - part of it can run concurrently with the rest;
-- it edits shared DI, database/schema, socket, navigation, shared state, public API, or build
-  configuration together with otherwise isolated feature work;
+- it edits shared DI, native/JNI, navigation, shared state, public API, publication, or build
+  configuration together with otherwise isolated module work;
 - its done condition would be vague (for example, "feature works") rather than observable;
 - android-dev would need to choose an unstated contract, behavior, path, or technology.
 
@@ -78,7 +79,8 @@ screens when independently demoable, but allow one outcome to cross required mod
 
 ### Order execution
 
-Build a dependency DAG from verified contracts and shared-file touchpoints. Place a work item in a
+Build a dependency DAG from verified module/consumer contracts and shared-file touchpoints. Order
+producer contract changes before consumers, tests, and integration checks. Place a work item in a
 wave only after all dependencies are satisfied. Also order tasks inside each story and across
 stories. Mark within-wave concurrency only when exact path/symbol ownership and collision keys do
 not overlap; serialize actual shared infrastructure changes. Do not force a foundation first or
@@ -92,7 +94,9 @@ Return:
 - Work-item Backlog:
   `FR-ID | SC-ID | AC-ID | Work-ID/Story-ID | outcome | Screens/Modules | Depends-on`; add user-story wording, G/W/T, Points, MoSCoW, and Sprint only in requested delivery-backlog mode with supplied inputs;
 - Task Backlog:
-  `Task-ID | Story-ID | owner stage | objective | exact path/symbol scope | preconditions/inputs | done condition | verification/Test-ID | depends on | collision key`;
+  `Task-ID | Story-ID | owning module | owner stage | objective | exact path/symbol scope | preconditions/inputs | done condition | verification/Test-ID/Check-ID | depends on | collision key`;
+- Module Integration Matrix:
+  `Check-ID | changed module | affected consumer/external contract | boundary | command or device/manual check | reason | integration-testing owner task`;
 - Dependency Map;
 - Execution Waves listing task IDs with concurrency/serialization and file-ownership reasons;
 - Sprint Plan only when packing was requested and capacity was supplied;

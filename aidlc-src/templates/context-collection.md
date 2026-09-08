@@ -13,26 +13,34 @@ wholesale.
    or static-check command. Commit, push, distribution, signing, upload, and publishing always need
    separate explicit authorization.
 3. Match the surrounding architecture, naming, and patterns. Project-specific invariants live in
-   `.aidlc/context.md` under project ground rules.
+   `.aidlc/context.md`; executable module ownership, dependencies, risk tags, and verification
+   defaults live in `.aidlc/modules.json`.
+4. Before planning or changing code, name the owning module, changed modules, dependency closure,
+   public/native/build contracts, and verification closure. Validate registry edges against
+   Gradle/source and keep external consumers visible for public libraries.
 
 ## 10. Planning conventions
 
-- Prefer independently testable vertical slices. A slice may cross modules when the architecture
-  requires it; identify one primary user-facing surface.
+- Prefer independently testable behavior slices inside the narrowest owning module. A slice may
+  cross modules only when a contract or consumer integration requires it; name a primary owner.
 - Create shared foundations first only when multiple slices truly depend on them.
 - Give every work item a stable ID, dependencies, acceptance contract, owned scope, and test scope.
   Add formal user stories, estimates, priority, or sprint placement only when requested and based
   on a supplied team scale/capacity.
-- Serialize navigation, DI, migrations/schema, shared state, and build configuration.
-- Add an integration item when multiple slices must be wired together.
+- Order producer-contract work before consumer/wiring work. Serialize public API, JNI/native,
+  publication/build logic, DI, migrations/schema, navigation, and shared-state boundaries.
+- Add an integration task whenever the change is cross-module, modifies a public/native/build
+  contract, changes consumer wiring, or the module registry requires an integration gate.
+- The verification matrix must cover the changed module set and the direct/transitive consumers
+  whose compile/runtime contract can be affected; device/toolchain-only evidence is explicit.
 
 ## 11. Feature → review workflow
 
 The generated `.aidlc/pipelines.json` is the executable flow source. Preserve traceability across
 artifacts:
 
-Feature: `FR-ID → SC-ID → AC-ID → Work-ID/Story-ID → Task-ID → changed path → Test-ID → review status`.
-Bug: `ticket → fix Task-ID → changed path → testing Task-ID → Test-ID → review status`.
+Feature: `FR-ID → SC-ID → AC-ID → Work-ID/Story-ID → Task-ID/module/change → Test-ID → Check-ID/consumer → review status`.
+Bug: `ticket → fix Task-ID/module/change → testing Task-ID/Test-ID → Check-ID/consumer → review status`.
 
 ### Ticket folder and automation
 
@@ -42,10 +50,13 @@ the stage agent permits. Write only its primary artifact and explicitly allowed 
 outputs.
 
 Guarded flows (`impl-flow`, `auto-*`, `fixbug-flow`, and `qa-flow`) require the first artifact
-line to be `AUTOMATION: CONTINUE` or `AUTOMATION: STOP — reason`. Stop on missing/contradictory
-input, untestable/absent acceptance criteria, unconfirmed bug causation, or protected work involving
-authentication, payments, security/privacy, destructive data/migration, realtime/offline sync,
-shared navigation/DI/state, or build logic.
+line to be `AUTOMATION: CONTINUE` or `AUTOMATION: STOP — reason`. Stop on a missing material
+decision, contradictory or untestable requirements, unconfirmed bug causation, an unresolved
+external contract, or an action that needs authority not granted by the user. High-risk work
+(public APIs, native/JNI, authentication/security/privacy, destructive data, shared DI/state, or
+build/publication logic) does not stop merely because it is risky; it requires explicit contract,
+consumer-impact, rollback, and verification evidence. Publishing, signing, upload, distribution,
+commit, and push remain separately authorized actions.
 
 ### Artifact contract
 
@@ -57,9 +68,10 @@ shared navigation/DI/state, or build logic.
 | implementation-plan | `SOLUTION-DESIGN.md` | `IMPLEMENT-PLAN.md` |
 | android-dev | feature: `IMPLEMENT-PLAN.md` + `SOLUTION-DESIGN.md`; bug: `BUG-INVESTIGATION.md`; referenced design support and plan/fix-owned code | `CHANGESET.md` + approved source/resource/config changes |
 | testing | `CHANGESET.md` + changed code | `UNIT-TEST-REPORT.md` + approved test source |
+| integration-testing | `CHANGESET.md` + `UNIT-TEST-REPORT.md` + changed code and module registry | `INTEGRATION-TEST-REPORT.md`; no production changes |
 | qa-plan | `DEV-SPEC.md` (acceptance criteria) | `TEST-CASES.md` |
-| automation-test | impl/standalone: `CHANGESET.md` + changed code; qa-flow: `TEST-CASES.md` | `AUTOMATION-TEST-REPORT.md` + approved instrumented test source |
-| review | `CHANGESET.md`, `UNIT-TEST-REPORT.md`, and feature design/plan or bug investigation (qa-flow: `AUTOMATION-TEST-REPORT.md` + `TEST-CASES.md` + `DEV-SPEC.md`) | `CODE-REVIEW.md` |
+| automation-test | standalone: `CHANGESET.md` + changed code; qa-flow: `TEST-CASES.md` | `AUTOMATION-TEST-REPORT.md` + approved instrumented test source |
+| review | `CHANGESET.md`, `UNIT-TEST-REPORT.md`, `INTEGRATION-TEST-REPORT.md`, and feature design/plan or bug investigation (qa-flow: `AUTOMATION-TEST-REPORT.md` + `TEST-CASES.md` + `DEV-SPEC.md`) | `CODE-REVIEW.md` |
 | discovery | request scope + codebase | `FLOW-DISCOVERY.md` |
 
 ### Per-stage load contract
@@ -76,6 +88,7 @@ additional project topics and optional machinery sections.
 | implementation-plan | modules, architecture, DI, high-risk, naming | — |
 | android-dev | modules, architecture, UI, data, DI, storage, naming, high-risk | — |
 | testing | architecture, data, UI state, test tooling, high-risk | — |
+| integration-testing | modules, architecture, DI, storage, test tooling, high-risk | §10, §12 |
 | qa-plan | app/domain, architecture, UI, UI state, test tooling, high-risk | — |
 | automation-test | architecture, UI, UI state, test tooling, high-risk | — |
 | review | modules, architecture, UI, data, DI, storage, naming, test tooling, high-risk | — |
@@ -94,14 +107,26 @@ additional project topics and optional machinery sections.
    when the runtime supports isolation; otherwise discard the prior stage's working set and do not
    carry unreferenced evidence forward.
 
-Implementation/testing fan-out is allowed only for disjoint owned paths. Shared integration files
-remain serialized. Analysis, design, planning, and review remain human-visible gates unless the
-selected manifest flow says otherwise.
+Implementation/testing fan-out is allowed only for disjoint module and path ownership. Shared
+contract/integration files remain serialized. The integration-testing stage may run independent
+module checks concurrently but produces one dependency-closure verdict. Analysis, design,
+planning, and review remain human-visible gates unless the selected manifest flow says otherwise.
 
 ## 12. Testing process
 
-Test changed behavior at the closest useful JVM, Android, Room, Paging, or UI layer. Use
-deterministic fakes and in-memory test stores; never production storage or network. Cover relevant
-success, failure, cancellation/concurrency, mapping, and regression paths. An authorized testing
-stage may execute the smallest relevant command; report exact commands/results and environmental
-blockers honestly.
+Test changed behavior at the closest useful JVM, Android, native, or UI layer. Use deterministic
+fakes; never production storage, network, credentials, or publication endpoints. Cover relevant
+success, failure, cancellation/concurrency, mapping, lifecycle, and regression paths.
+
+Verification has two gates:
+
+1. `testing` authors and executes focused behavior tests in the owning modules.
+2. `integration-testing` computes the affected module/consumer closure, then runs the smallest
+   compile/test/package checks that prove crossed contracts still compose. Public library changes
+   require compatibility reasoning even with no in-repository caller. Native changes additionally
+   track Kotlin/JNI/C++, CMake/linkage, ABI packaging, lifecycle/thread ownership, and required
+   device coverage. Build-logic changes verify intended plugin consumers without publishing.
+
+Only an exact recorded green command is passed. A device, credential, SDK/NDK, or toolchain blocker
+is reported as `not executed` with the smallest follow-up command; it is never converted into a
+pass. The final review decides whether an unexecuted required check blocks release readiness.

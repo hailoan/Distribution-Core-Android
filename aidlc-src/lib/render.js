@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * aidlc render helper — the ONE place that maps the project profile
+ * aidlc render helper — the ONE place that maps and validates the project profile
  * (aidlc.project.json) onto the {{PLACEHOLDERS}} used by the templates and by
  * setup-aidlc.sh. Two modes:
  *
@@ -8,6 +8,7 @@
  *                                              for setup-aidlc.sh to `eval`.
  *   node render.js file <profile> <template> → prints the template with every
  *                                              {{KEY}} substituted, to stdout.
+ *   node render.js modules <profile>         → prints the validated module registry.
  *
  * Keeping this tiny and dependency-free (plain JSON.parse, no yaml/json5) so the
  * generator has no npm install step.
@@ -54,7 +55,7 @@ function safePathSegment(v, where) {
     fail(where + " must be a 1-120 character filename segment using only letters, numbers, '.', '_', or '-'");
   }
   const folded = v.toLowerCase();
-  const stageCommands = new Set(["study", "design", "task", "implement", "ut", "discover", "fixbug", "vibe"]);
+  const stageCommands = new Set(["study", "design", "task", "implement", "ut", "it", "discover", "fixbug", "vibe"]);
   if (stageCommands.has(folded)) {
     fail(where + " conflicts with the built-in /" + folded + " command");
   }
@@ -83,7 +84,6 @@ function buildVars(p) {
     WORKSPACE_NAME: req(project.workspaceName, "project.workspaceName"),
     PROJECT_NAME: req(project.name, "project.name"),
     PROJECT_SHORT: req(project.shortName, "project.shortName"),
-    FEATURE_MODULE: req(project.featureModule, "project.featureModule"),
     ANDROID_DEV_ARTIFACT: req(stack.androidDevArtifact, "stack.androidDevArtifact"),
     // package as a source path (com.example.app → com/example/app) for
     // {{ANDROID_DEV_ARTIFACT}}/{{PACKAGE_PATH}}/<layer>/ style examples.
@@ -107,6 +107,94 @@ function buildVars(p) {
     TITLE_CODEX: req(titles.codex, "frameworkTitles.codex"),
     TITLE_COPILOT: req(titles.copilot, "frameworkTitles.copilot"),
     CURSOR_DESC: req(p.cursorRuleDescription, "cursorRuleDescription"),
+  };
+}
+
+function stringArray(value, where, options = {}) {
+  const allowEmpty = options.allowEmpty === true;
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) || value.some((item) => typeof item !== "string" || !item.trim())) {
+    fail(where + " must be " + (allowEmpty ? "an" : "a non-empty") + " array of non-empty strings");
+  }
+  return value.map((item) => item.trim());
+}
+
+function buildModuleRegistry(p) {
+  const declared = Array.isArray(p.modules) ? p.modules : [];
+  if (!declared.length) fail("modules must be a non-empty array of module records");
+  const ids = new Set();
+  const modules = declared.map((item, index) => {
+    const where = "modules[" + index + "]";
+    if (!item || typeof item !== "object" || Array.isArray(item)) fail(where + " must be an object");
+    const id = req(item.id, where + ".id");
+    if (typeof id !== "string" || !/^[a-z][a-z0-9_-]*$/.test(id)) fail(where + ".id must be a lowercase module id");
+    if (ids.has(id)) fail("duplicate module id: " + id);
+    ids.add(id);
+    if (typeof item.gradlePath !== "string" || !/^:[A-Za-z0-9:_-]+$/.test(item.gradlePath)) {
+      fail(where + ".gradlePath must be an absolute Gradle project path such as :app");
+    }
+    const publicContract = item.publicContract;
+    if (typeof publicContract !== "boolean") fail(where + ".publicContract must be boolean");
+    if (![true, false, "unknown"].includes(item.externalConsumers === undefined ? false : item.externalConsumers)) {
+      fail(where + ".externalConsumers must be true, false, or \"unknown\"");
+    }
+    const roots = stringArray(item.roots, where + ".roots");
+    if (roots.some((root) => root.startsWith("/") || root.split("/").includes(".."))) {
+      fail(where + ".roots must contain relative project paths without '..'");
+    }
+    return {
+      id,
+      gradlePath: item.gradlePath,
+      kind: req(item.kind, where + ".kind"),
+      namespace: req(item.namespace, where + ".namespace"),
+      role: req(item.role, where + ".role"),
+      status: req(item.status, where + ".status"),
+      roots,
+      dependsOn: stringArray(item.dependsOn || [], where + ".dependsOn", { allowEmpty: true }),
+      dependencySemantics: item.dependencySemantics || "project-dependency",
+      publicContract,
+      externalConsumers: item.externalConsumers === undefined ? false : item.externalConsumers,
+      verification: stringArray(item.verification, where + ".verification"),
+      riskTags: stringArray(item.riskTags || [], where + ".riskTags", { allowEmpty: true }),
+    };
+  });
+  modules.forEach((module) => module.dependsOn.forEach((dependency) => {
+    if (!ids.has(dependency)) fail("module " + module.id + " depends on unknown module " + dependency);
+    if (dependency === module.id) fail("module " + module.id + " cannot depend on itself");
+  }));
+
+  const visiting = new Set();
+  const visited = new Set();
+  const byId = new Map(modules.map((module) => [module.id, module]));
+  function visit(id, trail) {
+    if (visiting.has(id)) fail("module dependency cycle: " + [...trail, id].join(" -> "));
+    if (visited.has(id)) return;
+    visiting.add(id);
+    byId.get(id).dependsOn.forEach((dependency) => visit(dependency, [...trail, id]));
+    visiting.delete(id);
+    visited.add(id);
+  }
+  modules.forEach((module) => visit(module.id, []));
+
+  const stackModules = new Set(stringArray((p.stack || {}).modules, "stack.modules"));
+  const registryIds = new Set(modules.map((module) => module.id));
+  const mismatch = [...new Set([...stackModules, ...registryIds])].filter((id) => stackModules.has(id) !== registryIds.has(id));
+  if (mismatch.length) fail("stack.modules and modules registry differ: " + mismatch.sort().join(", "));
+
+  const quality = p.quality || {};
+  const repairCycles = quality.maxAutonomousRepairCycles === undefined ? 0 : quality.maxAutonomousRepairCycles;
+  if (!Number.isInteger(repairCycles) || repairCycles < 0 || repairCycles > 5) {
+    fail("quality.maxAutonomousRepairCycles must be an integer from 0 to 5");
+  }
+  return {
+    version: "1.0",
+    project: req((p.project || {}).name, "project.name"),
+    source: "aidlc.project.json",
+    quality: {
+      requireModuleImpact: quality.requireModuleImpact !== false,
+      requireIntegrationGateFor: stringArray(quality.requireIntegrationGateFor || [], "quality.requireIntegrationGateFor", { allowEmpty: true }),
+      maxAutonomousRepairCycles: repairCycles,
+    },
+    modules,
   };
 }
 
@@ -140,14 +228,19 @@ function shAssign(key, value) {
 function main() {
   const [mode, profileFile, templateFile] = process.argv.slice(2);
   if (!mode || !profileFile) {
-    fail("usage: render.js <vars|file> <profile> [template]");
+    fail("usage: render.js <vars|file|modules> <profile> [template]");
   }
-  const vars = buildVars(loadProfile(profileFile));
+  const profile = loadProfile(profileFile);
+  if (mode === "modules") {
+    process.stdout.write(JSON.stringify(buildModuleRegistry(profile), null, 2) + "\n");
+    return;
+  }
+  const vars = buildVars(profile);
   if (mode === "vars") {
     // Only the scalars setup-aidlc.sh needs in shell (skip multi-line ENV_MODULES).
     const shellKeys = [
       "MODEL_HEAVY", "MODEL_MID",
-      "PROJECT_NAME", "PROJECT_SHORT", "FEATURE_MODULE", "CMD_REVIEW",
+      "PROJECT_NAME", "PROJECT_SHORT", "CMD_REVIEW",
       "TICKET_EXAMPLE",
       "TITLE_CLAUDE", "TITLE_CURSOR", "TITLE_CODEX", "TITLE_COPILOT", "CURSOR_DESC",
     ];

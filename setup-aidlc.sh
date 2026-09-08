@@ -6,7 +6,7 @@
 # the templates in aidlc-src/ against the project profile aidlc.project.json.
 #
 #   • profile  → aidlc.project.json   (the ONE file you edit per project:
-#                identity, stack, ticket example, models)
+#                identity, stack, module graph, quality gates, ticket example, models)
 #   • templates→ aidlc-src/templates/ (context-collection.md, agents/*.md,
 #                skills/*.md — edit rules here as real files, not heredocs)
 #   • output   → .aidlc/ (shared core) + per-framework rules file & commands
@@ -23,7 +23,8 @@
 #     all                      → every framework above
 #
 # To adapt to another project: edit aidlc.project.json, generate once, then fill the
-# project facts in `.aidlc/context.md`.
+# project facts in `.aidlc/context.md`. The generated `.aidlc/modules.json` is the executable
+# module/dependency contract used by every stage.
 # ============================================================
 
 set -euo pipefail
@@ -43,14 +44,15 @@ source_compatible() {
   local base="$1" rel schema=""
   [ -f "$base/toolkit.schema" ] || return 1
   IFS= read -r schema < "$base/toolkit.schema" || return 1
-  [ "$schema" = "4" ] || return 1
+  [ "$schema" = "5" ] || return 1
   local required=(
     lib/render.js lib/stage-context.js lib/figma-digest.js
     templates/context.md templates/context-collection.md
     templates/agents/android-dev.md templates/agents/bug-investigation.md
     templates/agents/discovery.md templates/agents/feature-analysis.md
-    templates/agents/implementation-plan.md templates/agents/review.md
-    templates/agents/solution-design.md templates/agents/testing.md
+    templates/agents/implementation-plan.md templates/agents/integration-testing.md
+    templates/agents/qa-plan.md templates/agents/automation-test.md
+    templates/agents/review.md templates/agents/solution-design.md templates/agents/testing.md
     templates/skills/api-analysis.md templates/skills/architecture-analysis.md
     templates/skills/bug-root-cause.md templates/skills/codebase-search.md
     templates/skills/compose-guideline.md templates/skills/dependency-analysis.md
@@ -60,6 +62,9 @@ source_compatible() {
     templates/skills/regression-analysis.md templates/skills/reuse-detection.md
     templates/skills/review-checklist.md templates/skills/risk-analysis.md
     templates/skills/room-guideline.md templates/skills/ticket-reading.md
+    templates/skills/module-impact-analysis.md templates/skills/native-boundary-guideline.md
+    templates/skills/gradle-module-guideline.md templates/skills/ffmpeg-guideline.md
+    templates/skills/opengles-guideline.md templates/skills/ndk-cpp-guideline.md
   )
   for rel in "${required[@]}"; do
     [ -f "$base/$rel" ] || return 1
@@ -75,7 +80,7 @@ if [ -n "${AIDLC_SRC:-}" ]; then
   if source_compatible "$AIDLC_SRC"; then
     SRC="$AIDLC_SRC"
   else
-    echo "✗ Configured AIDLC_SRC is legacy or incomplete (toolkit schema 4 required): $AIDLC_SRC"
+    echo "✗ Configured AIDLC_SRC is legacy or incomplete (toolkit schema 5 required): $AIDLC_SRC"
     echo "  Generation stopped before writing output so custom workflow behavior is preserved."
     echo "  Migrate it, or stop passing it; IDE users can move the local toolkit aside after preserving custom edits."
     exit 1
@@ -84,7 +89,7 @@ elif [ -n "$BUNDLED_SRC" ]; then
   SRC="$BUNDLED_SRC"
 else
   bad_src="$ROOT/aidlc-src"
-  echo "✗ AI-DLC source is legacy or incomplete (toolkit schema 4 required): $bad_src"
+  echo "✗ AI-DLC source is legacy or incomplete (toolkit schema 5 required): $bad_src"
   echo "  Migrate it to the compact flat-agent layout (including stage-context.js and"
   echo "  figma-digest.js), or run the generator from a current bundled toolkit."
   exit 1
@@ -103,7 +108,7 @@ Usage: ./setup-aidlc.sh <framework>
   github-copilot | copilot → .github/copilot-instructions.md + .github/prompts/*.prompt.md
   all                      → generate for every framework
 
-Regenerates shared machinery: .aidlc/context-collection.md, .aidlc/skills/*.md,
+Regenerates shared machinery: .aidlc/context-collection.md, .aidlc/modules.json, .aidlc/skills/*.md,
 .aidlc/agents/*.md, .aidlc/lib/*.js, and .aidlc/pipelines.json.
 Seeds .aidlc/context.md only when missing unless AIDLC_REFRESH_CONTEXT=1.
 
@@ -142,8 +147,7 @@ scaffold_profile() {
     "name": "My Project",
     "shortName": "MyProject",
     "package": "com.example.myproject",
-    "workspaceName": "MyProjectFeatureFactory",
-    "featureModule": "app"
+    "workspaceName": "MyProjectFeatureFactory"
   },
   "stack": {
     "projectType": "android",
@@ -155,6 +159,26 @@ scaffold_profile() {
     "targetSdk": "35",
     "modules": ["app"],
     "androidDevArtifact": "app/src/main/java"
+  },
+  "modules": [
+    {
+      "id": "app",
+      "gradlePath": ":app",
+      "kind": "android-application",
+      "namespace": "com.example.myproject",
+      "role": "application and integration surface",
+      "status": "active",
+      "roots": ["app/"],
+      "dependsOn": [],
+      "publicContract": false,
+      "verification": [":app:assembleDebug"],
+      "riskTags": []
+    }
+  ],
+  "quality": {
+    "requireModuleImpact": true,
+    "requireIntegrationGateFor": ["cross-module", "public-contract", "build-logic"],
+    "maxAutonomousRepairCycles": 2
   },
   "ticket": { "example": "PROJ-123" },
   "commands": { "review": "aidlc-review" },
@@ -286,6 +310,7 @@ echo "🚀 Generating $PROJECT_NAME AI-DLC shared core (.aidlc/) …"
 
 # --- shared core: rendered straight from templates -------------------------
 write_atomic .aidlc/context-collection.md render "$TPL/context-collection.md"
+write_atomic .aidlc/modules.json node "$RENDER" modules "$PROFILE"
 if [ -f .aidlc/context.md ] && [ "${AIDLC_REFRESH_CONTEXT:-0}" != "1" ]; then
   echo "  • .aidlc/context.md (preserved; set AIDLC_REFRESH_CONTEXT=1 to regenerate)"
 else
@@ -327,6 +352,7 @@ agent_cmd() { case "$1" in
   implementation-plan) echo "/task";;
   android-dev) echo "/implement";;
   testing) echo "/ut";;
+  integration-testing) echo "/it";;
   qa-plan) echo "/qa-plan";;
   automation-test) echo "/autotest";;
   review) echo "/$CMD_REVIEW";;
@@ -341,6 +367,7 @@ agent_artifact() { case "$1" in
   implementation-plan) echo "IMPLEMENT-PLAN.md";;
   android-dev) echo "CHANGESET.md";;
   testing) echo "UNIT-TEST-REPORT.md";;
+  integration-testing) echo "INTEGRATION-TEST-REPORT.md";;
   qa-plan) echo "TEST-CASES.md";;
   automation-test) echo "AUTOMATION-TEST-REPORT.md";;
   review) echo "CODE-REVIEW.md";;
@@ -358,6 +385,7 @@ agent_reads() { case "$1" in
   solution-design) echo "DEV-SPEC.md";;
   implementation-plan) echo "SOLUTION-DESIGN.md";;
   testing)         echo "CHANGESET.md";;
+  integration-testing) echo "CHANGESET.md UNIT-TEST-REPORT.md";;
   qa-plan)         echo "DEV-SPEC.md";;
   automation-test) echo "CHANGESET.md";;
   *)                echo "";;   # entry stages — external input only (no prior artifact)
@@ -369,8 +397,8 @@ step_reads() { # <flow> <agent> <previous-artifact>
   local flow="$1" agent="$2" previous="$3"
   case "$flow:$agent" in
     impl-flow:android-dev|auto-feature-flow:android-dev) echo "IMPLEMENT-PLAN.md SOLUTION-DESIGN.md";;
-    impl-flow:review) echo "CHANGESET.md UNIT-TEST-REPORT.md AUTOMATION-TEST-REPORT.md IMPLEMENT-PLAN.md SOLUTION-DESIGN.md";;
-    fixbug-flow:review) echo "CHANGESET.md UNIT-TEST-REPORT.md BUG-INVESTIGATION.md";;
+    impl-flow:review) echo "CHANGESET.md UNIT-TEST-REPORT.md INTEGRATION-TEST-REPORT.md IMPLEMENT-PLAN.md SOLUTION-DESIGN.md";;
+    fixbug-flow:review) echo "CHANGESET.md UNIT-TEST-REPORT.md INTEGRATION-TEST-REPORT.md BUG-INVESTIGATION.md";;
     qa-flow:automation-test) echo "TEST-CASES.md";;   # QA flow: automate cases, not a code changeset
     qa-flow:review) echo "AUTOMATION-TEST-REPORT.md TEST-CASES.md DEV-SPEC.md";;
     techlead-review-flow:review) echo "";;
@@ -393,7 +421,7 @@ reads_json() {
 # The orchestrator passes this to the platform's model flag; overridable per step/task.
 agent_model() { case "$1" in
   feature-analysis|bug-investigation|solution-design|review|discovery|qa-plan) echo "opus";;
-  implementation-plan|android-dev|testing|automation-test) echo "sonnet";;
+  implementation-plan|android-dev|testing|integration-testing|automation-test) echo "sonnet";;
   *) echo "";;
 esac; }
 
@@ -407,16 +435,16 @@ agent_exec() { echo "subagent"; }
 # Android development and testing may fan out only after disjoint file ownership is assigned;
 # shared integration surfaces remain serialized. See context-collection.md §11.
 agent_fanout() { case "$1" in
-  android-dev|testing|automation-test) echo "true";;
+  android-dev|testing|integration-testing|automation-test) echo "true";;
   *) echo "false";;
 esac; }
 
 # flow id → ordered "agent:humanReview(0|1)" steps.
 flow_steps() { case "$1" in
-  impl-flow)            echo "feature-analysis:0 solution-design:0 implementation-plan:0 android-dev:0 testing:0 automation-test:0 review:0";;
+  impl-flow)            echo "feature-analysis:0 solution-design:0 implementation-plan:0 android-dev:0 testing:0 integration-testing:0 review:0";;
   auto-feature-flow)    echo "feature-analysis:0 solution-design:0 implementation-plan:0 android-dev:0";;
   discover-flow)        echo "discovery:0";;
-  fixbug-flow)          echo "bug-investigation:0 android-dev:0 testing:0 review:0";;
+  fixbug-flow)          echo "bug-investigation:0 android-dev:0 testing:0 integration-testing:0 review:0";;
   fixcrash-flow)        echo "bug-investigation:0 android-dev:0";;
   auto-bug-flow)        echo "bug-investigation:0 android-dev:0";;
   automation-test-flow) echo "automation-test:0";;
@@ -427,7 +455,7 @@ esac; }
 gen_pipelines_json() {
   local flows="impl-flow auto-feature-flow discover-flow fixbug-flow fixcrash-flow auto-bug-flow automation-test-flow qa-flow techlead-review-flow"
   local nf; nf=$(echo $flows | wc -w | tr -d ' ')
-  printf '{\n  "version": "2.0",\n  "flows": {\n'
+  printf '{\n  "version": "3.0",\n  "flows": {\n'
   local fi=0
   for flow in $flows; do
     fi=$((fi+1))
@@ -481,12 +509,12 @@ write_rules() {
     cat <<'PTR'
 ---
 
-## Project context → `.aidlc/context.md` · AI-DLC machinery → `.aidlc/context-collection.md`
+## Project context → `.aidlc/context.md` · modules → `.aidlc/modules.json` · AI-DLC machinery → `.aidlc/context-collection.md`
 
-Everything specific to this codebase lives in **`.aidlc/context.md`**: modules,
-architecture, data, UI, DI, storage, naming, testing, and high-risk areas. Stages
-load only their relevant topics through `.aidlc/lib/stage-context.js`; section
-numbers may differ between projects.
+Project facts and invariants live in **`.aidlc/context.md`**. Executable module ownership,
+dependency edges, risk tags, and default verification live in **`.aidlc/modules.json`**. Stages
+load a compact combined packet through `.aidlc/lib/stage-context.js`; section numbers may differ
+between projects.
 
 The generic AI-DLC machinery lives in **`.aidlc/context-collection.md`**: ground rules
 (§0), planning conventions (§10), the feature→review workflow + per-stage artifact &
@@ -504,8 +532,9 @@ STAGES=(
   "study|feature-analysis|Feature Analysis|DEV-SPEC.md"
   "design|solution-design|Solution Design|SOLUTION-DESIGN.md"
   "task|implementation-plan|Implementation Plan|IMPLEMENT-PLAN.md"
-  "implement|android-dev|Android Dev|CHANGESET.md + code in $FEATURE_MODULE"
+  "implement|android-dev|Android Dev|CHANGESET.md + approved code in owning module(s)"
   "ut|testing|Testing|UNIT-TEST-REPORT.md"
+  "it|integration-testing|Module Integration Test|INTEGRATION-TEST-REPORT.md"
   "qa-plan|qa-plan|QA Test Plan|TEST-CASES.md"
   "autotest|automation-test|Automation Test|AUTOMATION-TEST-REPORT.md"
   "$CMD_REVIEW|review|Review|CODE-REVIEW.md"
@@ -561,9 +590,9 @@ ROWS
       if [ "$skill" = "android-dev" ]; then
         reads="IMPLEMENT-PLAN.md + SOLUTION-DESIGN.md (feature) or BUG-INVESTIGATION.md (bug)"
       elif [ "$skill" = "automation-test" ]; then
-        # automation-test consumes a code changeset in impl/standalone flows, but the written
+        # automation-test consumes a code changeset in its standalone flow, but the written
         # test cases in the QA flow.
-        reads="CHANGESET.md (impl / standalone) or TEST-CASES.md (qa-flow)"
+        reads="CHANGESET.md (standalone) or TEST-CASES.md (qa-flow)"
       else
         reads="$(agent_reads "$skill")"
         [ -n "$reads" ] || reads="—"
@@ -623,7 +652,7 @@ context file wholesale. Load only atomic skills the agent conditionally routes f
 BODY
       write_inputs "$cmd" "$skill" "$askline"
       printf '\n%s\n' "$argline"
-    } > "$dir/$cmd$suffix"
+    } > "$dir/$cmd$suffix" || return 1
     printf '%s\n' "$cmd$suffix" >> "$current"
   done
   # /vibe — autonomous full flow
@@ -632,23 +661,43 @@ BODY
     cat <<BODY
 # /vibe — autonomous AI-DLC (vibe flow)
 
-Run the guarded vibe flow end-to-end, no human gates: feature-analysis → solution-design →
-implementation-plan → android-dev → testing → automation-test → review. Resolve the **ticket output folder**
-once (\$AIDLC_OUTPUT_DIR if set, else output/<ticket>/) and use it for every stage. For each
-stage, use a fresh native subagent/context when the runtime supports it and return only its marker,
+Run the guarded, module-aware vibe flow end-to-end: feature-analysis → solution-design →
+implementation-plan → android-dev → testing → integration-testing → review. The request in this
+chat is the authoritative feature input; a separate BA document and ticket id are optional. If no
+ticket id is supplied, derive a readable lowercase slug and use \`output/vibe-<slug>/\` (append a
+numeric suffix if it already exists). \`\$AIDLC_OUTPUT_DIR\` still wins. Resolve the folder once and
+use it for every stage. Do not ask the user to choose a module: use \`.aidlc/modules.json\` and source
+evidence to identify the owner and dependency closure. Ask only when a missing decision can
+materially change behavior, data/security, a public contract, or authorized scope. For each stage,
+use a fresh native subagent/context when the runtime supports it and return only its marker,
 artifact path, and short summary before continuing. A native subagent already has its agent
 definition; do not reload it. Without native isolation, read \`.aidlc/agents/<stage>.md\` once.
 Add \`--flow impl-flow\` to that agent's context-loader command. Use only the resulting packet,
 named prior artifacts, and applicable atomic skills. Require each stage artifact's first
 line to be \`AUTOMATION: CONTINUE\` or
-\`AUTOMATION: STOP — <reason>\`, and stop immediately on STOP. In android-dev, implement each parallel
-wave from the plan's Dependency Map concurrently only when file ownership is disjoint; keep DI,
-navigation, database schema/migrations, shared state, and build configuration serialized. Stop
-and report at <ticket folder>/CODE-REVIEW.md.
+\`AUTOMATION: STOP — <reason>\`, and stop immediately on STOP. In android-dev, implement parallel
+work only when module and file ownership are disjoint; serialize public contracts, JNI/native
+boundaries, DI, shared state, and build configuration. Testing owns focused tests.
+Integration-testing verifies each changed module plus its affected consumer closure and records
+device/toolchain checks as executed or explicitly blocked. Instrumented/UI automation is selected
+only when the plan requires it; use \`/qa\` for requirement-driven UI automation.
+
+If review returns No-Go only for defects introduced by this change and correction stays inside the
+approved design and plan, run at most two bounded repair cycles: android-dev → testing →
+integration-testing → review. Never widen scope during repair. Stop for a changed contract/design
+decision, unavailable authority, external blocker, or the third No-Go. Return the final result from
+<ticket folder>/CODE-REVIEW.md.
 BODY
-    write_inputs "study" "feature-analysis" "$askline"
+    cat <<INPUTS
+
+## Inputs
+
+Required: a concrete feature/change request in the invocation or current chat. Optional: ticket id,
+acceptance details, constraints, links, and local attachments. Do not require a duplicate BA spec.
+If the request itself is missing, ask one concise question and wait. $askline
+INPUTS
     printf '\n%s\n' "$argline"
-  } > "$dir/vibe$suffix"
+  } > "$dir/vibe$suffix" || return 1
   printf '%s\n' "vibe$suffix" >> "$current"
   # /qa — autonomous QA / automation-tester flow
   {
@@ -674,7 +723,7 @@ subagent per disjoint test file only; never touch production code. Stop and repo
 BODY
     write_inputs "study" "feature-analysis" "$askline"
     printf '\n%s\n' "$argline"
-  } > "$dir/qa$suffix"
+  } > "$dir/qa$suffix" || return 1
   printf '%s\n' "qa$suffix" >> "$current"
   migrate_legacy_commands "$dir" "$key-commands" "$suffix" "$current"
   reconcile_owned_files "$dir" "$key-commands" "$current"

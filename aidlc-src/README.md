@@ -34,7 +34,7 @@ phạm vi dự án.
 
 ```
 aidlc-src/
-├── toolkit.schema              # phiên bản tương thích (hiện tại là "4")
+├── toolkit.schema              # phiên bản tương thích (hiện tại là "5")
 ├── lib/
 │   ├── render.js               # profile → thay thế {{PLACEHOLDER}}
 │   ├── stage-context.js        # dựng gói ngữ cảnh gọn cho từng giai đoạn
@@ -43,16 +43,17 @@ aidlc-src/
     ├── context.md              # mẫu thông tin dự án  → .aidlc/context.md (khởi tạo một lần)
     ├── context-collection.md   # quy tắc workflow chung → .aidlc/context-collection.md
     ├── workspace.yaml          # sổ đăng ký agent/skill/pipeline dạng dễ đọc
-    ├── agents/*.md             # 10 agent theo từng giai đoạn
-    └── skills/*.md             # 17 kỹ năng nguyên tử, tái sử dụng
+    ├── agents/*.md             # 11 agent theo từng giai đoạn
+    └── skills/*.md             # 21 kỹ năng nguyên tử, tái sử dụng
 ```
 
 ---
 
 ## 1. Cách hoạt động (bức tranh tổng thể)
 
-Bộ công cụ là một **trình render mỏng bên trên các template**. Không có gì đặc
-thù cho dự án bị viết cứng (hardcode) trong template; thay vào đó:
+Bộ công cụ là một **trình render mỏng bên trên các template**. Identity, topology
+module và quality policy nằm trong profile; các invariant chi tiết của repository
+nằm trong context template/runtime:
 
 | Lớp | Tệp | Ai chỉnh sửa |
 | --- | --- | --- |
@@ -65,8 +66,8 @@ thù cho dự án bị viết cứng (hardcode) trong template; thay vào đó:
 `setup-aidlc.sh` đọc profile, thay thế các `{{PLACEHOLDERS}}` trong template, và
 ghi ra:
 
-- `.aidlc/` — lõi runtime dùng chung (agents, skills, context, helpers, và một
-  tệp `pipelines.json` máy đọc được);
+- `.aidlc/` — lõi runtime dùng chung (agents, skills, context, helpers,
+  `modules.json`, và `pipelines.json` máy đọc được);
 - một **tệp quy tắc (rules file)** cho framework của bạn (`CLAUDE.md`,
   `.cursor/rules/aidlc.mdc`, `AGENTS.md`, hoặc `.github/copilot-instructions.md`);
 - các **lệnh slash** cho từng giai đoạn (ví dụ `.claude/commands/study.md`).
@@ -99,14 +100,16 @@ Từ thư mục gốc của dự án, chạy trình sinh với framework mục t
 ./setup-aidlc.sh all             # → tất cả framework ở trên
 ```
 
-Ở lần chạy đầu tiên, nếu thiếu `aidlc.project.json`, script sẽ tạo một tệp mặc
-định và dừng lại để bạn điền vào. Hãy chỉnh sửa phần định danh, tech stack, ví dụ
-ticket, và các bí danh model (model aliases) của nó, rồi chạy lại.
+Ở lần chạy đầu tiên, nếu thiếu `aidlc.project.json`, script sẽ tạo một profile
+mặc định và tiếp tục sinh. Hãy chỉnh sửa phần định danh, tech stack, module graph,
+quality policy, ví dụ ticket và model aliases, rồi chạy lại.
 
 ### Tinh chỉnh dự án (làm một lần)
 
-1. **`aidlc.project.json`** — tên/package dự án, danh sách module, min/target SDK,
-   ví dụ ticket, và các bí danh model (`heavy`/`mid`) mà mỗi giai đoạn sử dụng.
+1. **`aidlc.project.json`** — tên/package dự án; từng module với Gradle path,
+   namespace, owner role, dependency, public/external contract, verification và risk tag; quality
+   gates; min/target SDK; ví dụ ticket; model aliases. Trình sinh validate profile/cycle rồi tạo
+   `.aidlc/modules.json`; `stage-context.js` phát hiện module/source drift khi stage chạy.
 2. **`.aidlc/context.md`** — **ranh giới phạm vi** (xem phần trên). Hãy thay phần
    văn bản `TODO`/khung mẫu bằng module, kiến trúc, các pattern data/UI, DI, lưu
    trữ, quy ước đặt tên, bộ công cụ kiểm thử, và các vùng rủi ro cao thực tế của
@@ -121,7 +124,7 @@ ticket, và các bí danh model (model aliases) của nó, rồi chạy lại.
 | --- | --- |
 | `AIDLC_DEST` | Ghi kết quả sinh ra vào thư mục khác (mặc định là gốc repo) |
 | `AIDLC_PROFILE` | Dùng profile khác thay cho `<dest>/aidlc.project.json` |
-| `AIDLC_SRC` | Dùng một nguồn toolkit cụ thể (phải thỏa `toolkit.schema` 4) |
+| `AIDLC_SRC` | Dùng một nguồn toolkit cụ thể (phải thỏa `toolkit.schema` 5) |
 | `AIDLC_REFRESH_CONTEXT=1` | Sinh lại `.aidlc/context.md` từ template (ghi đè thông tin dự án) |
 | `AIDLC_OUTPUT_DIR` | Ghi đè thư mục output của ticket (mặc định `output/<ticket>/`) |
 | `AIDLC_FLOW` | Cố định flow id cho một giai đoạn (ví dụ `impl-flow`) |
@@ -143,6 +146,7 @@ thực hiện công việc, và ghi ra artifact của chính mình.
 | `/task` | implementation-plan | `SOLUTION-DESIGN.md` | `IMPLEMENT-PLAN.md` | mid |
 | `/implement` | android-dev | `IMPLEMENT-PLAN.md` + `SOLUTION-DESIGN.md` (hoặc `BUG-INVESTIGATION.md`) | `CHANGESET.md` + code | mid |
 | `/ut` | testing | `CHANGESET.md` | `UNIT-TEST-REPORT.md` + tests | mid |
+| `/it` | integration-testing | `CHANGESET.md` + `UNIT-TEST-REPORT.md` | `INTEGRATION-TEST-REPORT.md` | mid |
 | `/qa-plan` | qa-plan | `DEV-SPEC.md` | `TEST-CASES.md` | heavy |
 | `/autotest` | automation-test | `CHANGESET.md` (hoặc `TEST-CASES.md`) | `AUTOMATION-TEST-REPORT.md` + test instrumented | mid |
 | `/aidlc-review` | review | changeset + tests + design/plan | `CODE-REVIEW.md` | heavy |
@@ -164,10 +168,13 @@ Chú thích từng lệnh — nó làm gì và ghi ra những gì:
   (DAG) và các đợt (waves). **Chỉ lập kế hoạch.** → Ghi `IMPLEMENT-PLAN.md`.
 - **`/implement`** (android-dev) — Hiện thực các task đã duyệt theo đúng kiến trúc
   dự án; task rời chạy song song, bề mặt dùng chung chạy tuần tự. → Ghi
-  `CHANGESET.md` (bảng kê thay đổi) **và mã nguồn thực** trong `app/`.
+  `CHANGESET.md` (bảng kê thay đổi) **và mã nguồn thực** trong (các) module sở hữu.
 - **`/ut`** (testing) — Viết unit test (JVM/Room/Paging) xác định cho hành vi đã
   thay đổi và báo cáo trung thực kết quả chạy. → Ghi `UNIT-TEST-REPORT.md` + mã
   test dưới `src/test`.
+- **`/it`** (integration-testing) — Tính dependency/consumer closure từ diff thực,
+  rồi kiểm tra compile/test/package/device tối thiểu cho các module và hợp đồng bị ảnh hưởng.
+  **Không sửa code.** → Ghi `INTEGRATION-TEST-REPORT.md`.
 - **`/qa-plan`** (qa-plan) — Biến tiêu chí chấp nhận thành bộ test case truy vết
   được (tích cực/tiêu cực/biên), đánh dấu case nào tự động hóa được. **Không viết
   code test.** → Ghi `TEST-CASES.md`.
@@ -186,7 +193,9 @@ Chú thích từng lệnh — nó làm gì và ghi ra những gì:
 Hai **flow tự động** xâu chuỗi các giai đoạn từ đầu đến cuối, không có chốt duyệt
 của con người:
 
-- **`/vibe`** — tính năng: phân tích → thiết kế → kế hoạch → hiện thực → kiểm thử → autotest → review.
+- **`/vibe`** — nhận mô tả tự nhiên (ticket/tài liệu BA là tùy chọn), tự chọn module sở hữu:
+  phân tích → thiết kế → kế hoạch → hiện thực → unit test → integration module → review; sửa tối đa
+  hai vòng khi review tìm thấy lỗi nằm trong scope đã duyệt.
 - **`/qa`** — kiểm thử hành vi từ một yêu cầu (không viết code production): phân tích → qa-plan → autotest → review.
 
 ### Chạy thủ công một giai đoạn
@@ -210,9 +219,9 @@ bỏ trống — nó không bao giờ tự bịa ticket id, đường dẫn, hay
 
 | Flow | Các bước |
 | --- | --- |
-| `impl-flow` | feature-analysis → solution-design → implementation-plan → android-dev → testing → automation-test → review |
+| `impl-flow` | feature-analysis → solution-design → implementation-plan → android-dev → testing → integration-testing → review |
 | `auto-feature-flow` | feature-analysis → solution-design → implementation-plan → android-dev (dừng ở code) |
-| `fixbug-flow` | bug-investigation → android-dev → testing → review |
+| `fixbug-flow` | bug-investigation → android-dev → testing → integration-testing → review |
 | `fixcrash-flow` / `auto-bug-flow` | bug-investigation → android-dev (dừng ở code) |
 | `qa-flow` | feature-analysis → qa-plan → automation-test → review |
 | `discover-flow` | discovery |
@@ -223,9 +232,9 @@ bỏ trống — nó không bao giờ tự bịa ticket id, đường dẫn, hay
 `qa-flow`) yêu cầu dòng đầu tiên của mỗi artifact phải là `AUTOMATION: CONTINUE`
 hoặc `AUTOMATION: STOP — <lý do>`. Một giai đoạn sẽ dừng khi input thiếu/mâu
 thuẫn, tiêu chí chấp nhận không kiểm thử được, nguyên nhân bug chưa được xác nhận,
-hoặc khi đụng đến công việc được bảo vệ (xác thực, thanh toán, bảo mật, migration
-hủy dữ liệu, đồng bộ realtime/offline, navigation/DI/state dùng chung, hoặc logic
-build).
+hoặc khi thiếu quyết định/hợp đồng/ủy quyền quan trọng. Public API, native/JNI,
+xác thực, DI/state dùng chung và build/publication không tự động dừng chỉ vì rủi ro;
+chúng bắt buộc có phân tích consumer, compatibility, rollback và verification rõ ràng.
 
 ### Cấu trúc thư mục `output/<ticket>/` theo từng flow
 
@@ -241,9 +250,9 @@ output/DNLW-123/
 ├── DEV-SPEC.md               # (1) /study      — feature-analysis
 ├── SOLUTION-DESIGN.md        # (2) /design     — solution-design
 ├── IMPLEMENT-PLAN.md         # (3) /task       — implementation-plan
-├── CHANGESET.md              # (4) /implement  — android-dev (mã nguồn ghi thẳng vào app/)
+├── CHANGESET.md              # (4) /implement  — android-dev (module sở hữu)
 ├── UNIT-TEST-REPORT.md       # (5) /ut         — testing
-├── AUTOMATION-TEST-REPORT.md # (6) /autotest   — automation-test
+├── INTEGRATION-TEST-REPORT.md # (6) /it         — dependency/consumer closure
 └── CODE-REVIEW.md            # (7) review      — kết luận Go / No-Go
 ```
 
@@ -253,9 +262,10 @@ output/DNLW-123/
 output/FIXBUG-1/
 ├── input/                    # log / trace / đính kèm đã chuyển đổi (nếu có)
 ├── BUG-INVESTIGATION.md      # (1) /fixbug     — bug-investigation (chẩn đoán + task sửa)
-├── CHANGESET.md              # (2) /implement  — android-dev (áp bản sửa vào app/)
+├── CHANGESET.md              # (2) /implement  — android-dev (áp bản sửa vào module sở hữu)
 ├── UNIT-TEST-REPORT.md       # (3) /ut         — testing
-└── CODE-REVIEW.md            # (4) review      — kết luận Go / No-Go
+├── INTEGRATION-TEST-REPORT.md # (4) /it         — dependency/consumer closure
+└── CODE-REVIEW.md            # (5) review      — kết luận Go / No-Go
 ```
 
 **`qa-flow`** (`/qa`) — kiểm thử hành vi từ một yêu cầu, **không viết code production:**
@@ -326,6 +336,12 @@ thỏa mãn** (không bao giờ nạp cho "đủ bộ"):
 | `api-analysis` | discovery, feature-analysis, solution-design | Quan sát các hợp đồng API hiện có khi công việc đụng đến networking |
 | `architecture-analysis` | discovery, solution-design, review | Làm rõ các lớp, module, đấu nối DI, quyết định bộ công cụ UI |
 | `dependency-analysis` | phần lớn các giai đoạn phân tích | Bản đồ ảnh hưởng có giới hạn cho một symbol hoặc diff đã xác nhận |
+| `module-impact-analysis` | mọi giai đoạn thay đổi code | Module sở hữu, dependency/consumer closure, contract và verification closure |
+| `native-boundary-guideline` | khi đụng camera/JNI/C++/CMake/ABI | Bảo vệ lifecycle, thread, EGL, codec và native packaging |
+| `gradle-module-guideline` | khi đổi dependency/build/plugin/publication | Bảo vệ module graph, SDK/JVM, plugin resolution và public contract |
+| `ffmpeg-guideline` | khi đụng AVFrame/swscale/ffmpegv2/ABI packaging | Bảo vệ ownership AVFrame, swscale, pin phiên bản/soname, thứ tự load và packaging (encode/mux là MediaCodec, không phải libavcodec) |
+| `opengles-guideline` | khi đụng EGL/GLES/GLSL/FBO của camera | Bảo vệ một luồng EGL, đường YUV (không OES), ráp shader phía Kotlin và pipeline FBO/PBO capture |
+| `ndk-cpp-guideline` | khi đụng JNI/C++/CMake/toolchain của camera | Bảo vệ ranh giới JNI (mangling tay, ref local/global, attach/detach luồng), STL/toolchain, SingleThreadExecutor và vòng đời native |
 | `reuse-detection` | feature-analysis, solution-design, android-dev | Tìm các scaffold/UI/use-case/repo/mapper hiện có tương thích |
 | `risk-analysis` | phân tích, thiết kế, kế hoạch, review | Rủi ro có bằng chứng trong code bị đụng đến |
 | `design-intent-analysis` | feature-analysis | Trích ý đồ sản phẩm nhìn thấy được từ một thiết kế được cung cấp |
@@ -346,26 +362,38 @@ Mỗi artifact giữ lại một chuỗi ID để người review có thể theo
 suốt tới kết luận review:
 
 ```
-Tính năng: FR-ID → SC-ID → AC-ID → Work-ID/Story-ID → Task-ID → đường dẫn thay đổi → Test-ID → trạng thái review
-Bug:       ticket → fix Task-ID → đường dẫn thay đổi → testing Task-ID → Test-ID → trạng thái review
+Tính năng: FR-ID → SC-ID → AC-ID → Task-ID/module/change → Test-ID → Check-ID/consumer → review
+Bug:       ticket → fix Task-ID/module/change → Test-ID → Check-ID/consumer → review
 ```
 
 ---
 
-## 5. Sơ đồ tuần tự — flow tính năng (`/vibe`)
+## 5. Sơ đồ pipeline — flow tính năng (`/vibe`)
 
 Sơ đồ này minh họa một lần chạy `impl-flow` có canh gác: mỗi giai đoạn dựng gói
 ngữ cảnh của nó, đọc artifact trước đó, ghi ra artifact của chính mình, và dấu
 `AUTOMATION: CONTINUE/STOP` làm chốt cho việc bàn giao sang giai đoạn kế tiếp.
 
-> **Bản draw.io:** [xem trên Google Drive](https://drive.google.com/file/d/1wvRhUzFTDXEvRpmNKVdKXEYIgHq1f3Bp/view?usp=sharing)
-> · nguồn: [`docs/feature-flow.drawio`](docs/feature-flow.drawio)
-
-[![Sơ đồ tuần tự flow tính năng (bấm để xem bản đầy đủ trên Drive)](https://drive.google.com/thumbnail?id=1wvRhUzFTDXEvRpmNKVdKXEYIgHq1f3Bp&sz=w1200)](https://drive.google.com/file/d/1wvRhUzFTDXEvRpmNKVdKXEYIgHq1f3Bp/view?usp=sharing)
+```mermaid
+flowchart LR
+    R[Yêu cầu tự nhiên] --> A[Feature analysis]
+    A --> D[Solution design]
+    D --> P[Implementation plan]
+    P --> I[Implement theo module owner]
+    I --> U[Focused tests]
+    U --> X[Module integration gate]
+    X --> V[Review Go / No-Go]
+    M[(modules.json)] --> A
+    M --> D
+    M --> P
+    M --> X
+    M --> V
+    V -. sửa trong scope, tối đa 2 vòng .-> I
+```
 
 ### Cách phân giải stage-context (phóng to)
 
-Cách một giai đoạn biến ba tệp thành một gói tối thiểu:
+Cách một giai đoạn biến bốn tệp thành một gói tối thiểu:
 
 ```mermaid
 flowchart LR
@@ -373,10 +401,12 @@ flowchart LR
     B --> C1[context.md<br/>thông tin dự án]
     B --> C2[context-collection.md<br/>quy tắc chung]
     B --> C3[pipelines.json<br/>bảng kê flow]
+    B --> C4[modules.json<br/>topology + verification]
     C2 --> D[load contract từng stage<br/>cần chủ đề nào?]
     C1 --> E[phân loại các mục H2 theo chủ đề<br/>loại bỏ khung TODO]
     D --> E
     C3 --> F[bản ghi workflow<br/>đọc / ghi / guarded / fanout]
+    C4 --> G
     E --> G[[Gói ngữ cảnh gọn]]
     F --> G
     G --> H[Agent thực hiện giai đoạn<br/>+ nạp skill theo điều kiện]
@@ -393,6 +423,8 @@ flowchart LR
   sẽ được dọn khỏi `.aidlc/` tự động.
 - **Thay đổi thông tin dự án nào mà một giai đoạn nhìn thấy** → sửa bảng "Per-stage
   load contract" trong `templates/context-collection.md`.
+- **Thay đổi module/dependency/risk/verification mặc định** → sửa `modules` và `quality`
+  trong `aidlc.project.json`; `setup-aidlc.sh` sẽ validate và sinh `.aidlc/modules.json`.
 - **Thay đổi các flow / thứ tự giai đoạn** → sửa logic `flow_steps` / `STAGES`
   trong `setup-aidlc.sh` (nó sinh ra `pipelines.json`).
 - **Nâng cấp toolkit** → tệp `toolkit.schema` kiểm soát tính tương thích; trình

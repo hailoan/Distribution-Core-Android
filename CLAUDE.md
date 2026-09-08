@@ -2,110 +2,112 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## ast-graph (managed by AIDLC extension — do not edit by hand)
+## 0. Ground rules (read before touching anything)
 
-This project has a pre-built AST graph at `.ast-graph/graph.db`, exposed via the
-`ast-graph` MCP server (auto-registered by the AIDLC VS Code extension). The
-graph stores every function/class/method/import in the codebase plus their
-caller→callee edges, so structural questions can be answered without grepping.
+1. Use a current project knowledge graph first for structural questions when it is available and
+   covers the target module. Validate important results against source. Otherwise use focused text/
+   symbol search and source inspection; never treat a missing graph edge as proof of no impact.
+2. An authorized implementation or testing stage may run the smallest relevant compile, unit-test,
+   or static-check command. Commit, push, distribution, signing, upload, and publishing always need
+   separate explicit authorization.
+3. Match the surrounding architecture, naming, and patterns. Project-specific invariants live in
+   `.aidlc/context.md`; executable module ownership, dependencies, risk tags, and verification
+   defaults live in `.aidlc/modules.json`.
+4. Before planning or changing code, name the owning module, changed modules, dependency closure,
+   public/native/build contracts, and verification closure. Validate registry edges against
+   Gradle/source and keep external consumers visible for public libraries.
 
-**Prefer ast-graph tools over grep/read when the question is structural.** A
-single MCP call is typically 10–50 tokens; the equivalent grep+read sweep across
-a 500-file repo is 5k–50k.
+## 0. Project ground rules
 
-Reach for ast-graph first for:
-- "where is X defined / who calls X / what does X call" → ast-graph `symbol`
-- "if I change X, what breaks" → ast-graph `blast-radius`
-- "what does this PR touch structurally" → ast-graph `changed-symbols`
-- "find unreferenced code" → ast-graph `dead-code`
-- "list HTTP endpoints" → ast-graph `routes`
-- "where are the architectural hotspots" → ast-graph `hotspots`
-- "fuzzy find a symbol by partial name" → ast-graph `search`
+- This is a library-oriented, multi-module Android workspace with a sample app. It is not a
+  clean-architecture product application and it has no single feature module. Put changes in the
+  narrowest owning module and do not introduce domain/data/UI layers that the local code does not
+  use.
+- Treat Kotlin public APIs, Hilt bindings, Gradle plugin/publication behavior, JNI declarations,
+  exported JNI names, C++ ownership, CMake linkage, ABI packaging, and bundled native libraries as
+  cross-boundary contracts. Inspect every side of the relevant contract before editing it.
+- The code graph is useful for first-party Kotlin/C++ relationships, but its aggregate view is
+  dominated by vendored FFmpeg headers and also includes AI-DLC JavaScript. Validate graph results
+  against source and do not treat a missing edge as proof that a library API has no external
+  consumers.
+- Treat `camera/src/main/cpp/ffmpegv2` as vendored headers and prebuilt binaries. Ignore `build/`,
+  `.gradle/`, `.cxx/`, and `.externalNativeBuild/` during source analysis. Modify vendored or
+  generated content only for an explicitly scoped upgrade or packaging task.
+- Preserve the surrounding implementation style and existing module ownership. Do not combine a
+  requested change with opportunistic renames, architectural rewrites, dependency upgrades, or
+  publication changes.
+- The smallest relevant compile or test is normal verification. Committing, pushing, signing,
+  publishing, uploading, or distributing an artifact always requires separate explicit approval.
 
-Keep using grep/read/edit for:
-- reading function bodies, comments, docstrings (graph stores skeletons, not source)
-- editing or refactoring code
-- following intent, naming, or non-AST signals (config files, prose)
+## 1. What the app is
 
-If the graph looks stale, ask the user to run `AIDLC: Rescan AST Graph`. The
-extension also rescans automatically a few seconds after any source file save.
+`Distribution-Core-Android` is a Kotlin-first collection of reusable Android experiments and
+libraries, plus a small XML/AppCompat host application. The substantive reusable areas are:
 
-## Build Commands
+- coroutine-based MVVM/state primitives in `core`;
+- Ktor/OkHttp networking and token hooks in `network`; and
+- Camera2 NDK capture, JNI, EGL/OpenGL ES filtering, frame capture, and MP4 recording in `camera`.
 
-```bash
-./gradlew assembleDebug           # Build all modules (debug)
-./gradlew assembleRelease         # Build all modules (release)
-./gradlew test                    # Run all unit tests
-./gradlew connectedAndroidTest    # Run instrumented tests (requires device/emulator)
+The repository also contains a Gradle publication plugin, an app startup benchmark, and a newly
+scaffolded `videolib` library. Current source is mixed Kotlin, Java, and C++; GLSL assets and vendored
+FFmpeg C headers/shared objects support the camera pipeline. There is no Compose UI in source, no
+Room/database layer, and no product-level clean-architecture feature stack.
 
-# Scope to a single module
-./gradlew :network:test
-./gradlew :core:test
+The shared catalog declares Kotlin 2.2.10, AGP 8.9.1, compile SDK 36, target SDK 35, and min SDK 24.
+Current module exceptions are: `core` compiles with SDK 35, `videolib` has min SDK 21, and `camera`
+uses Java/Kotlin 17 while the other Android modules use JVM 11.
 
-# Run a single test class or method
-./gradlew :core:test --tests "com.chiistudio.core.BaseViewModelUnitTest"
-./gradlew :network:test --tests "com.chiistudio.network.RetryTokenUnitTest.test retry token"
-```
+---
 
-**Required env vars** (for dependency resolution from the private Maven repo):
-`GITHUB_USERNAME`, `GITHUB_ACCESS_TOKEN`, `GITHUB_PUBLISH`
+## Project context → `.aidlc/context.md` · modules → `.aidlc/modules.json` · AI-DLC machinery → `.aidlc/context-collection.md`
 
-## Project Structure
+Project facts and invariants live in **`.aidlc/context.md`**. Executable module ownership,
+dependency edges, risk tags, and default verification live in **`.aidlc/modules.json`**. Stages
+load a compact combined packet through `.aidlc/lib/stage-context.js`; section numbers may differ
+between projects.
 
-| Module | Purpose |
-|---|---|
-| `core` | `BaseViewModel` MVVM base + `ReentrantMutex`, `BaseAdapter` |
-| `network` | Ktor HTTP client library with token management and Hilt DI |
-| `camera` | OpenGL ES / Camera2 NDK library — see `camera/CLAUDE.md` |
-| `plugin` | Custom Gradle publish plugin (`com.chiistudio.plugin`) |
-| `benchmark` | Macrobenchmark module |
-| `app` | Sample / host app wiring the modules together |
+The generic AI-DLC machinery lives in **`.aidlc/context-collection.md`**: ground rules
+(§0), planning conventions (§10), the feature→review workflow + per-stage artifact &
+load contract (§11), and the testing process (§12).
 
-## `core` Module — BaseViewModel
+Before a non-trivial change, generate the compact stage packet so the relevant
+project conventions are present without loading both context files in full.
 
-`BaseViewModel<S, A, E>` enforces a Redux-style unidirectional data flow:
+<!-- code-review-graph MCP tools -->
+## MCP Tools: code-review-graph
 
-- **State `S`** — immutable `StateFlow` snapshot, the single source of truth.
-- **Action `A`** — UI intents, dispatched via `sendAction()`.
-- **Mutation `M`** — atomic state transforms, queued via `sendMutation()` and processed sequentially through a `Channel`. This guarantees no two mutations race against each other.
-- **Effect `E`** — one-shot events (navigation, toasts) emitted via `sendEffect()`.
+**IMPORTANT: This project has a knowledge graph. ALWAYS use the
+code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
+the codebase.** The graph is faster, cheaper (fewer tokens), and gives
+you structural context (callers, dependents, test coverage) that file
+scanning cannot.
 
-Override `handleAction(action, state)` to dispatch mutations or effects. Override `handleMutation(mutation, state): S` to return updated state. The base class wires the coroutine pipelines automatically in `init`.
+### When to use graph tools FIRST
 
-`ReentrantMutex` in the same package is a coroutine-safe reentrant lock used where the standard `Mutex` would deadlock on recursive calls.
+- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
+- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
+- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
+- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
+- **Architecture questions**: `get_architecture_overview` + `list_communities`
 
-## `network` Module — HTTP Client Pattern
+Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 
-Built on Ktor 2 (OkHttp engine) + Hilt. Each API surface follows a four-class decorator chain:
+### Key Tools
 
-```
-BearXxxClient   (BaseClient subclass — owns the HttpClient)
-    ↓ wrapped by
-BearXxxAuth     (intercepts requests: pre-emptive + reactive token refresh via IRetryToken)
-    ↓ wrapped by
-BearXxxHeader   (appends static headers via defaultHeader map)
-    ↓ composed into
-BearXxxService  (the injectable facade — implements IClient by delegating to client)
-```
+| Tool | Use when |
+| ------ | ---------- |
+| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
+| `get_review_context` | Need source snippets for review — token-efficient |
+| `get_impact_radius` | Understanding blast radius of a change |
+| `get_affected_flows` | Finding which execution paths are impacted |
+| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
+| `semantic_search_nodes` | Finding functions/classes by name or keyword |
+| `get_architecture_overview` | Understanding high-level codebase structure |
+| `refactor_tool` | Planning renames, finding dead code |
 
-All four are provided by a single Hilt `@Module` with qualifier annotations (`@XxxClient`, `@XxxAuth`, `@XxxHeader`).
+### Workflow
 
-**Token wiring** — the library is decoupled from auth implementation via two interfaces set on the `InitNetwork` singleton before Hilt initializes:
-- `ITokenManager.getAccessToken(): Pair<String, String>` — supplies (access, refresh) tokens for the Ktor Bearer plugin.
-- `IRetryToken` — drives pre-emptive refresh (`shouldRetryToken`) and reactive refresh on 401 (`needRetryToken`).
-
-`RetryTokenManager` is a helper that deduplicates concurrent token refreshes: the second and third callers await the first caller's `Deferred` rather than starting their own refresh.
-
-**Adding a new API service** — create `BearXxxClient`, `BearXxxAuth`, `BearXxxHeader`, `BearXxxService`, and a Hilt module following the weather service as a template (`network/src/main/java/com/chiistudio/network/service/weather/`). Register `InitNetwork.xxxTokenManager` and `InitNetwork.xxxRetryToken` in the application layer.
-
-## Key Tech Versions
-
-| Tech | Version |
-|---|---|
-| Kotlin | 2.2.10 |
-| AGP | 8.9.1 |
-| min SDK / compile SDK | 24 / 36 |
-| Ktor | 2.3.9 |
-| Hilt | 2.57.1 |
-| Compose BOM | 2025.08.00 |
-| kotlinx.serialization | 1.6.3 |
+1. The graph auto-updates on file changes (via hooks).
+2. Use `detect_changes` for code review.
+3. Use `get_affected_flows` to understand impact.
+4. Use `query_graph` pattern="tests_for" to check coverage.
