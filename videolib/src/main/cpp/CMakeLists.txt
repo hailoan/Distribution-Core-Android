@@ -29,7 +29,11 @@ endforeach()
 # it is loaded via System.loadLibrary("videolib").
 add_library(${CMAKE_PROJECT_NAME} SHARED
         # List C/C++ source files with relative paths to this CMakeLists.txt.
-        videolib.cpp)
+        videolib.cpp
+        # OpenGL ES preview pipeline (EGL renderer + GLES draw path). Header-only
+        # render_thread_executor.h / gl_program.h are pulled in via includes.
+        preview_renderer.cpp
+        gl_program.cpp)
 
 # 16 KB max-page-size on every ABI. arm64-v8a additionally requires -Bsymbolic
 # to resolve FFmpeg's aarch64 TX-table PC-relative relocations
@@ -57,4 +61,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
         m
         # Android system libraries
         android
-        log)
+        log
+        # OpenGL ES preview: EGL context + GLES 3.0 rendering onto the Surface.
+        EGL
+        GLESv3)
