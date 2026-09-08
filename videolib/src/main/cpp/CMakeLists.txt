@@ -1,37 +1,60 @@
 # For more information about using CMake with Android Studio, read the
 # documentation: https://d.android.com/studio/projects/add-native-code.html.
-# For more examples on how to use CMake, see https://github.com/android/ndk-samples.
 
-# Sets the minimum CMake version required for this project.
 cmake_minimum_required(VERSION 3.22.1)
 
-# Declares the project name. The project name can be accessed via ${ PROJECT_NAME},
-# Since this is the top level CMakeLists.txt, the project name is also accessible
-# with ${CMAKE_PROJECT_NAME} (both CMake variables are in-sync within the top level
-# build script scope).
 project("videolib")
 
-# Creates and names a library, sets it as either STATIC
-# or SHARED, and provides the relative paths to its source code.
-# You can define multiple libraries, and CMake builds them for you.
-# Gradle automatically packages shared libraries with your APK.
-#
-# In this top level CMakeLists.txt, ${CMAKE_PROJECT_NAME} is used to define
-# the target library name; in the sub-module's CMakeLists.txt, ${PROJECT_NAME}
-# is preferred for the same purpose.
-#
-# In order to load a library into your app from Java/Kotlin, you must call
-# System.loadLibrary() and pass the name of the library defined here;
-# for GameActivity/NativeActivity derived applications, the same library name must be
-# used in the AndroidManifest.xml file.
+# Keep libvideolib.so 16 KB-page aligned — the FFmpeg static archives under
+# ffmpeg/<abi> were cross-compiled with max-page-size=16384 (ffmpeg-build).
+set(CMAKE_ANDROID_PAGE_SIZE 16384)
+
+# --- Prebuilt FFmpeg 7.1 static archives (per ABI) ---------------------------
+# Cross-compiled out-of-band by ffmpeg-build/ and committed under
+# ffmpeg/<abi>/{include,lib}. Only arm64-v8a and armeabi-v7a are provided; the
+# module's abiFilters (build.gradle.kts) is restricted to match.
+set(FFMPEG_ROOT ${CMAKE_SOURCE_DIR}/ffmpeg/${ANDROID_ABI})
+set(FFMPEG_INCLUDE_DIR ${FFMPEG_ROOT}/include)
+set(FFMPEG_LIB_DIR ${FFMPEG_ROOT}/lib)
+include_directories(${FFMPEG_INCLUDE_DIR})
+
+# Import each archive as a STATIC IMPORTED target.
+foreach(fflib avdevice avfilter avformat avcodec swscale swresample avutil)
+    add_library(${fflib} STATIC IMPORTED)
+    set_target_properties(${fflib} PROPERTIES
+            IMPORTED_LOCATION ${FFMPEG_LIB_DIR}/lib${fflib}.a)
+endforeach()
+
+# Creates the module's shared library. Gradle packages it into the AAR/APK and
+# it is loaded via System.loadLibrary("videolib").
 add_library(${CMAKE_PROJECT_NAME} SHARED
         # List C/C++ source files with relative paths to this CMakeLists.txt.
         videolib.cpp)
 
-# Specifies libraries CMake should link to your target library. You
-# can link libraries from various origins, such as libraries defined in this
-# build script, prebuilt third-party libraries, or Android system libraries.
+# 16 KB max-page-size on every ABI. arm64-v8a additionally requires -Bsymbolic
+# to resolve FFmpeg's aarch64 TX-table PC-relative relocations
+# (libavutil/aarch64/tx_float_neon.S); without it the static link fails with
+# "R_AARCH64_ADR_PREL_PG_HI21 cannot be used against symbol 'ff_tx_tab_*_float'".
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-Wl,-Bsymbolic")
+endif()
+
+# Link the FFmpeg archives in dependency order (consumers before providers,
+# avutil last), wrapped in a link group so the linker rescans and resolves
+# FFmpeg's cross-references. z/m satisfy FFmpeg's zlib/math dependencies.
 target_link_libraries(${CMAKE_PROJECT_NAME}
-        # List libraries link to the target library
+        -Wl,--start-group
+        avdevice
+        avfilter
+        avformat
+        avcodec
+        swscale
+        swresample
+        avutil
+        -Wl,--end-group
+        z
+        m
+        # Android system libraries
         android
         log)
