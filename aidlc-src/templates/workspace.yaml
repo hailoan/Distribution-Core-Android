@@ -1,0 +1,493 @@
+name: {{WORKSPACE_NAME}}
+version: "4.0"
+
+# Agents consume a compact stage packet, load only applicable skills, and write one primary
+# artifact. `skills` are always-needed; `conditional_skills` are routed by the agent body.
+
+agents:
+
+  - id: discovery
+    name: Flow Discovery
+    skills: [codebase-search, dependency-analysis]
+    conditional_skills: [architecture-analysis, api-analysis]
+    model: {{MODEL_HEAVY}}
+    position: Senior Android Developer
+    description: Trace an existing flow from entry point through state and data boundaries.
+    artifact: output/<ticket>/FLOW-DISCOVERY.md
+
+  - id: feature-analysis
+    name: Feature Analysis
+    skills: [ticket-reading]
+    conditional_skills: [dev-spec-validation, feature-clarification, codebase-search, api-analysis, figma-fetch, design-intent-analysis, reuse-detection, dependency-analysis, risk-analysis]
+    model: {{MODEL_HEAVY}}
+    position: Developer
+    description: Convert supplied feature evidence into a slim, sourced DEV-SPEC without designing.
+    artifact: output/<ticket>/DEV-SPEC.md
+
+  - id: bug-investigation
+    name: Bug Investigation
+    skills: [ticket-reading]
+    conditional_skills: [bug-root-cause, codebase-search, dependency-analysis, regression-analysis, risk-analysis]
+    model: {{MODEL_HEAVY}}
+    position: Developer
+    description: Diagnose a bug or crash and produce an evidence-backed fix plan.
+    artifact: output/<ticket>/BUG-INVESTIGATION.md
+
+  - id: solution-design
+    name: Solution Design
+    skills: []
+    conditional_skills: [figma-fetch, architecture-analysis, reuse-detection, api-analysis, dependency-analysis, risk-analysis]
+    model: {{MODEL_HEAVY}}
+    position: Android Architect
+    description: Turn an approved DEV-SPEC into traceable behavior and architecture.
+    artifact: output/<ticket>/SOLUTION-DESIGN.md
+
+  - id: implementation-plan
+    name: Implementation Plan
+    skills: [planning]
+    conditional_skills: [dependency-analysis, risk-analysis]
+    model: {{MODEL_MID}}
+    position: Tech Lead
+    description: Produce a dependency-ordered, traceable implementation plan.
+    artifact: output/<ticket>/IMPLEMENT-PLAN.md
+
+  - id: android-dev
+    name: Android Developer
+    skills: []
+    conditional_skills: [reuse-detection, compose-guideline, room-guideline, paging-guideline]
+    model: {{MODEL_MID}}
+    position: Senior Android Developer
+    description: Implement approved tasks, loading only the platform guidance each task needs.
+    artifact: output/<ticket>/CHANGESET.md + {{ANDROID_DEV_ARTIFACT}}
+
+  - id: testing
+    name: Testing
+    skills: [regression-analysis]
+    conditional_skills: []
+    model: {{MODEL_MID}}
+    position: QA Automation Engineer
+    description: Add deterministic tests and report execution separately from authored coverage.
+    artifact: output/<ticket>/UNIT-TEST-REPORT.md
+
+  - id: qa-plan
+    name: QA Test Plan
+    skills: [regression-analysis]
+    conditional_skills: []
+    model: {{MODEL_HEAVY}}
+    position: QA Test Analyst
+    description: Turn acceptance criteria into traceable, reviewable test cases marked automatable and by level.
+    artifact: output/<ticket>/TEST-CASES.md
+
+  - id: automation-test
+    name: Automation Test
+    skills: [regression-analysis]
+    conditional_skills: [compose-guideline]
+    model: {{MODEL_MID}}
+    position: Automation Test Engineer
+    description: Add deterministic instrumented / UI tests under androidTest and report on-device execution honestly.
+    artifact: output/<ticket>/AUTOMATION-TEST-REPORT.md
+
+  - id: review
+    name: Review
+    skills: [review-checklist]
+    conditional_skills: [architecture-analysis, regression-analysis, risk-analysis]
+    model: {{MODEL_HEAVY}}
+    position: Principal Android Engineer
+    description: Review the actual diff, trace requirements and tests, and issue a Go/No-Go verdict.
+    artifact: output/<ticket>/CODE-REVIEW.md
+
+# Reusable skill registry — atomic capabilities composed by the agents above.
+skills:
+  - id: ticket-reading
+    path: ./.aidlc/skills/ticket-reading.md
+  - id: codebase-search
+    path: ./.aidlc/skills/codebase-search.md
+  - id: architecture-analysis
+    path: ./.aidlc/skills/architecture-analysis.md
+  - id: reuse-detection
+    path: ./.aidlc/skills/reuse-detection.md
+  - id: dependency-analysis
+    path: ./.aidlc/skills/dependency-analysis.md
+  - id: risk-analysis
+    path: ./.aidlc/skills/risk-analysis.md
+  - id: api-analysis
+    path: ./.aidlc/skills/api-analysis.md
+  - id: dev-spec-validation
+    path: ./.aidlc/skills/dev-spec-validation.md
+  - id: feature-clarification
+    path: ./.aidlc/skills/feature-clarification.md
+  - id: design-intent-analysis
+    path: ./.aidlc/skills/design-intent-analysis.md
+  - id: figma-fetch
+    path: ./.aidlc/skills/figma-fetch.md
+  - id: bug-root-cause
+    path: ./.aidlc/skills/bug-root-cause.md
+  - id: regression-analysis
+    path: ./.aidlc/skills/regression-analysis.md
+  - id: planning
+    path: ./.aidlc/skills/planning.md
+  - id: compose-guideline
+    path: ./.aidlc/skills/compose-guideline.md
+  - id: room-guideline
+    path: ./.aidlc/skills/room-guideline.md
+  - id: paging-guideline
+    path: ./.aidlc/skills/paging-guideline.md
+  - id: review-checklist
+    path: ./.aidlc/skills/review-checklist.md
+
+environment:
+  project_type: {{ENV_PROJECT_TYPE}}
+  language: {{ENV_LANGUAGE}}
+  architecture: {{ENV_ARCHITECTURE}}
+  ui_framework: {{ENV_UI_FRAMEWORK}}
+  di_framework: {{ENV_DI_FRAMEWORK}}
+  min_sdk: {{ENV_MIN_SDK}}
+  target_sdk: {{ENV_TARGET_SDK}}
+  modules:
+{{ENV_MODULES}}
+
+slash_commands:
+  - name: /study
+    agent: feature-analysis
+
+  - name: /fixbug
+    agent: bug-investigation
+
+  - name: /design
+    agent: solution-design
+
+  - name: /task
+    agent: implementation-plan
+
+  - name: /implement
+    agent: android-dev
+
+  - name: /ut
+    agent: testing
+
+  - name: /qa-plan
+    agent: qa-plan
+
+  - name: /autotest
+    agent: automation-test
+
+  - name: /{{CMD_REVIEW}}
+    agent: review
+
+  - name: /discover
+    agent: discovery
+
+  - name: /vibe
+    pipeline: impl-flow
+
+  - name: /qa
+    pipeline: qa-flow
+
+pipelines:
+
+  # Implement an Android task from a raw BA doc, optionally with a Figma design.
+  # feature-analysis is the understanding front-door: one budgeted pass over the
+  # requirement / design (intent) / api / codebase evidence, merged into a slim DEV-SPEC.md.
+  # solution-design turns the spec into architecture, flows, and acceptance criteria (and
+  # fetches the Figma frame JSON when the ticket has a design); implementation-plan and
+  # android-dev consumes it; testing then review close the loop.
+  - id: impl-flow
+    name: Implement
+    steps:
+
+      - agent: feature-analysis
+        enabled: true
+        requires: []
+        produces:
+          - output/<ticket>/DEV-SPEC.md
+        human_review: false
+        auto_review: false
+
+      - agent: solution-design
+        enabled: true
+        requires:
+          - output/<ticket>/DEV-SPEC.md
+        produces:
+          - output/<ticket>/SOLUTION-DESIGN.md
+        human_review: false
+        auto_review: false
+
+      - agent: implementation-plan
+        enabled: true
+        requires:
+          - output/<ticket>/SOLUTION-DESIGN.md
+        produces:
+          - output/<ticket>/IMPLEMENT-PLAN.md
+        human_review: false
+        auto_review: false
+
+      - agent: android-dev
+        enabled: true
+        requires:
+          - output/<ticket>/IMPLEMENT-PLAN.md
+          - output/<ticket>/SOLUTION-DESIGN.md
+        produces:
+          - output/<ticket>/CHANGESET.md
+        human_review: false
+        auto_review: false
+
+      - agent: testing
+        enabled: true
+        requires:
+          - output/<ticket>/CHANGESET.md
+        produces:
+          - output/<ticket>/UNIT-TEST-REPORT.md
+        human_review: false
+        auto_review: true
+
+      - agent: automation-test
+        enabled: true
+        requires:
+          - output/<ticket>/CHANGESET.md
+        produces:
+          - output/<ticket>/AUTOMATION-TEST-REPORT.md
+        human_review: false
+        auto_review: true
+
+      - agent: review
+        enabled: true
+        requires:
+          - output/<ticket>/CHANGESET.md
+          - output/<ticket>/UNIT-TEST-REPORT.md
+          - output/<ticket>/AUTOMATION-TEST-REPORT.md  # verify instrumented / UI coverage
+          - output/<ticket>/IMPLEMENT-PLAN.md      # review the change against the approved plan
+          - output/<ticket>/SOLUTION-DESIGN.md     # verify acceptance criteria
+        produces:
+          - output/<ticket>/CODE-REVIEW.md
+        human_review: false
+        auto_review: false
+
+    on_failure: stop
+
+  # Guarded automatic feature implementation. It stops after code is written, not at
+  # testing/review. Any stage may emit `AUTOMATION: STOP` in its artifact when the
+  # input is insufficient, contradictory, or touches a protected Android surface.
+  - id: auto-feature-flow
+    name: Auto Implement Feature
+    steps:
+
+      - agent: feature-analysis
+        enabled: true
+        requires: []
+        produces: [output/<ticket>/DEV-SPEC.md]
+        human_review: false
+        auto_review: false
+
+      - agent: solution-design
+        enabled: true
+        requires: [output/<ticket>/DEV-SPEC.md]
+        produces: [output/<ticket>/SOLUTION-DESIGN.md]
+        human_review: false
+        auto_review: false
+
+      - agent: implementation-plan
+        enabled: true
+        requires: [output/<ticket>/SOLUTION-DESIGN.md]
+        produces: [output/<ticket>/IMPLEMENT-PLAN.md]
+        human_review: false
+        auto_review: false
+
+      - agent: android-dev
+        enabled: true
+        requires: [output/<ticket>/IMPLEMENT-PLAN.md, output/<ticket>/SOLUTION-DESIGN.md]
+        produces: [output/<ticket>/CHANGESET.md]
+        human_review: false
+        auto_review: false
+
+    on_failure: stop
+
+  # Discover / document an existing flow from the codebase, for Android devs.
+  - id: discover-flow
+    name: Discover Flow
+    steps:
+
+      - agent: discovery
+        enabled: true
+        requires: []
+        produces:
+          - output/<ticket>/FLOW-DISCOVERY.md
+        human_review: false
+        auto_review: false
+
+    on_failure: stop
+
+  # Fix a bug — bug-investigation uses one isolated context for the report/logs/trace + codebase,
+  # then records a diagnosis and, only when confirmed, fix/testing tasks. Android-dev applies the
+  # fix, then testing + review verify it.
+  - id: fixbug-flow
+    name: Fix Bug Flow
+    steps:
+
+      - agent: bug-investigation
+        enabled: true
+        requires: []
+        produces:
+          - output/<ticket>/BUG-INVESTIGATION.md
+        human_review: false
+        auto_review: false
+
+      - agent: android-dev
+        enabled: true
+        requires:
+          - output/<ticket>/BUG-INVESTIGATION.md
+        produces:
+          - output/<ticket>/CHANGESET.md
+        human_review: false
+        auto_review: false
+
+      - agent: testing
+        enabled: true
+        requires:
+          - output/<ticket>/CHANGESET.md
+        produces:
+          - output/<ticket>/UNIT-TEST-REPORT.md
+        human_review: false
+        auto_review: true
+
+      - agent: review
+        enabled: true
+        requires:
+          - output/<ticket>/CHANGESET.md
+          - output/<ticket>/UNIT-TEST-REPORT.md
+          - output/<ticket>/BUG-INVESTIGATION.md
+        produces:
+          - output/<ticket>/CODE-REVIEW.md
+        human_review: false
+        auto_review: false
+
+    on_failure: stop
+
+  # Focused crash / ANR fix. Investigation must confirm the cause before android-dev applies
+  # the minimal fix. The flow intentionally stops at CHANGESET.md.
+  - id: fixcrash-flow
+    name: Fix Crash
+    steps:
+
+      - agent: bug-investigation
+        enabled: true
+        requires: []
+        produces: [output/<ticket>/BUG-INVESTIGATION.md]
+        human_review: false
+        auto_review: false
+
+      - agent: android-dev
+        enabled: true
+        requires: [output/<ticket>/BUG-INVESTIGATION.md]
+        produces: [output/<ticket>/CHANGESET.md]
+        human_review: false
+        auto_review: false
+
+    on_failure: stop
+
+  # Guarded automatic bug fix. It intentionally ends at CHANGESET.md; testing and
+  # review remain opt-in until project test commands and repair-loop policy exist.
+  - id: auto-bug-flow
+    name: Auto Fix Bug
+    steps:
+
+      - agent: bug-investigation
+        enabled: true
+        requires: []
+        produces: [output/<ticket>/BUG-INVESTIGATION.md]
+        human_review: false
+        auto_review: false
+
+      - agent: android-dev
+        enabled: true
+        requires: [output/<ticket>/BUG-INVESTIGATION.md]
+        produces: [output/<ticket>/CHANGESET.md]
+        human_review: false
+        auto_review: false
+
+    on_failure: stop
+
+  # Standalone instrumented / UI test authoring against an existing CHANGESET. Unguarded, like the
+  # unit-testing stage run on its own — add on-device coverage on demand without the full flow.
+  - id: automation-test-flow
+    name: Automation Test Flow
+    steps:
+
+      - agent: automation-test
+        enabled: true
+        requires:
+          - output/<ticket>/CHANGESET.md
+        produces:
+          - output/<ticket>/AUTOMATION-TEST-REPORT.md
+        human_review: false
+        auto_review: false
+
+    on_failure: stop
+
+  # QA / automation-tester flow from a raw requirement, writing NO production code. feature-analysis
+  # extracts acceptance criteria into DEV-SPEC.md; qa-plan turns each AC into reviewable test cases
+  # (TEST-CASES.md) marked automatable/level; automation-test automates the automatable cases
+  # (TC-ID → Test-ID) under androidTest and runs them; review signs off coverage vs the criteria.
+  # Guarded: each artifact's first line must be AUTOMATION: CONTINUE / STOP.
+  - id: qa-flow
+    name: QA Automation Flow
+    steps:
+
+      - agent: feature-analysis
+        enabled: true
+        requires: []
+        produces:
+          - output/<ticket>/DEV-SPEC.md
+        human_review: false
+        auto_review: false
+
+      - agent: qa-plan
+        enabled: true
+        requires:
+          - output/<ticket>/DEV-SPEC.md
+        produces:
+          - output/<ticket>/TEST-CASES.md
+        human_review: false
+        auto_review: false
+
+      - agent: automation-test
+        enabled: true
+        requires:
+          - output/<ticket>/TEST-CASES.md
+        produces:
+          - output/<ticket>/AUTOMATION-TEST-REPORT.md
+        human_review: false
+        auto_review: true
+
+      - agent: review
+        enabled: true
+        requires:
+          - output/<ticket>/AUTOMATION-TEST-REPORT.md
+          - output/<ticket>/TEST-CASES.md      # trace automated coverage back to the cases
+          - output/<ticket>/DEV-SPEC.md         # verify cases cover the acceptance criteria
+        produces:
+          - output/<ticket>/CODE-REVIEW.md
+        human_review: false
+        auto_review: false
+
+    on_failure: stop
+
+  # Tech lead code review — single-step review of the current diff/branch.
+  - id: techlead-review-flow
+    name: Tech Lead Code Review
+    steps:
+
+      - agent: review
+        enabled: true
+        requires: []
+        produces:
+          - output/<ticket>/CODE-REVIEW.md
+        human_review: false
+        auto_review: false
+
+    on_failure: stop
+
+sidebar:
+  views:
+    - type: agents-list
+    - type: skills-list
+    - type: pipelines-list
