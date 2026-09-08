@@ -1,0 +1,12 @@
+# FFmpeg-from-source build tooling — generated/large outputs are produced on demand.
+# NOTE: gitignore only treats '#' as a comment at the START of a line, so keep
+# each pattern on its own line with no trailing inline comment.
+
+# pinned FFmpeg checkout (fetched by build-ffmpeg.sh at the tag in config.sh)
+/src/
+
+# per-ABI intermediate configure/make output
+/build/
+
+# produced per-ABI artifact tree (include/ + lib/*.a) — the deliverable
+/dist/
