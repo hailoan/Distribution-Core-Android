@@ -213,6 +213,47 @@ Java_com_cii_videolib_VideoPreview_nativeStop(
     }
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_cii_videolib_VideoPreview_nativePause(
+        JNIEnv* env, jobject /* this */, jlong handle) {
+    VideoPlayback* playback = asPlayback(handle);
+    return playback != nullptr && playback->pause() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_cii_videolib_VideoPreview_nativeResume(
+        JNIEnv* env, jobject /* this */, jlong handle) {
+    VideoPlayback* playback = asPlayback(handle);
+    return playback != nullptr && playback->resume() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_cii_videolib_VideoPreview_nativeSetLooping(
+        JNIEnv* env, jobject /* this */, jlong handle, jboolean enabled) {
+    VideoPlayback* playback = asPlayback(handle);
+    return playback != nullptr && playback->setLooping(enabled == JNI_TRUE)
+           ? JNI_TRUE
+           : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_cii_videolib_VideoPreview_nativeSetPlaybackSpeed(
+        JNIEnv* env, jobject /* this */, jlong handle, jdouble speed) {
+    VideoPlayback* playback = asPlayback(handle);
+    return playback != nullptr && playback->setPlaybackSpeed(static_cast<double>(speed))
+           ? JNI_TRUE
+           : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_cii_videolib_VideoPreview_nativeSeekTo(
+        JNIEnv* env, jobject /* this */, jlong handle, jlong positionMs) {
+    VideoPlayback* playback = asPlayback(handle);
+    return playback != nullptr && playback->seekTo(static_cast<int64_t>(positionMs))
+           ? JNI_TRUE
+           : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_cii_videolib_VideoPreview_nativePushFrame(
         JNIEnv* env, jobject /* this */, jlong handle, jobject frame, jint width, jint height) {
