@@ -1,3 +1,18 @@
 <resources>
     <string name="app_name">Distribution-Core-Android</string>
+    <string name="pick_video">Choose local video</string>
+    <string name="video_surface_description">Selected video preview</string>
+    <string name="video_status_no_selection">Choose a local video to start playback.</string>
+    <string name="video_status_copying">Preparing the selected video…</string>
+    <string name="video_status_ready">Video ready.</string>
+    <string name="video_status_waiting_for_surface">Video ready. Waiting for the preview surface…</string>
+    <string name="video_status_playing">Playing video…</string>
+    <string name="video_status_completed">Playback completed.</string>
+    <string name="video_status_copy_error">Could not read the selected video.</string>
+    <string name="video_status_surface_error">Could not create the video preview surface.</string>
+    <string name="video_status_play_error">Could not start video playback.</string>
+    <string name="video_status_input_error">Could not open the selected video.</string>
+    <string name="video_status_unsupported">This video format is not supported.</string>
+    <string name="video_status_decode_error">The video could not be decoded.</string>
+    <string name="video_status_render_error">The video preview could not be rendered.</string>
 </resources>
