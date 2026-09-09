@@ -99,25 +99,39 @@ bool PreviewRenderer::surfaceAvailable(ANativeWindow *window) {
     return true;
 }
 
-void PreviewRenderer::pushFrame(const uint8_t *pixels, int width, int height) {
+bool PreviewRenderer::pushFrame(const uint8_t *pixels, int width, int height) {
     if (state_ != State::Ready && state_ != State::Rendering) {
-        return;
+        return false;
     }
     if (pixels == nullptr || width <= 0 || height <= 0) {
-        return; // invalid frame: ignore, keep last good state (AC-1)
+        return false; // invalid frame: ignore, keep last good state (AC-1)
     }
-    executor_.runSync([this, pixels, width, height] {
+    bool presented = false;
+    executor_.runSync([this, pixels, width, height, &presented] {
         if (eglMakeCurrent(display_, surface_, surface_, context_) != EGL_TRUE) {
             LOGE("pushFrame eglMakeCurrent failed: 0x%04x", eglGetError());
             return;
+        }
+        while (glGetError() != GL_NO_ERROR) {
+            // Clear any prior GL error so this presentation owns its result.
         }
         glViewport(0, 0, width_, height_);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         glProgram_.drawFrame(pixels, width, height);
-        eglSwapBuffers(display_, surface_);
+        const GLenum glError = glGetError();
+        if (glError != GL_NO_ERROR) {
+            LOGE("pushFrame GL failed: 0x%04x", glError);
+            return;
+        }
+        if (eglSwapBuffers(display_, surface_) != EGL_TRUE) {
+            LOGE("pushFrame eglSwapBuffers failed: 0x%04x", eglGetError());
+            return;
+        }
+        presented = true;
     });
-    state_ = State::Rendering;
+    state_ = presented ? State::Rendering : State::Failed;
+    return presented;
 }
 
 void PreviewRenderer::requestPattern() {

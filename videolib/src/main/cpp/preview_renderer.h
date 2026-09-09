@@ -37,10 +37,11 @@ public:
     // Returns false if the window is null or EGL/GL init fails (-> Failed).
     bool surfaceAvailable(ANativeWindow *window);
 
-    // Uploads and draws a host RGBA8888 frame. Ignored unless Ready/Rendering.
+    // Uploads and draws a host RGBA8888 frame. Returns false unless the frame
+    // was presented successfully while Ready/Rendering.
     // `pixels` must remain valid until the call returns (synchronous on render
     // thread); the caller owns the buffer.
-    void pushFrame(const uint8_t *pixels, int width, int height);
+    bool pushFrame(const uint8_t *pixels, int width, int height);
 
     // Draws the built-in test pattern. Ignored unless Ready/Rendering.
     void requestPattern();
@@ -49,6 +50,9 @@ public:
     void releaseSurface();
 
     State state() const { return state_; }
+    bool isSurfaceReady() const {
+        return state_ == State::Ready || state_ == State::Rendering;
+    }
 
 private:
     bool initEglLocked();       // render-thread body of surfaceAvailable

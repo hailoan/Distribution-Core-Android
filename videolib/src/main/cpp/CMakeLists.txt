@@ -30,6 +30,7 @@ endforeach()
 add_library(${CMAKE_PROJECT_NAME} SHARED
         # List C/C++ source files with relative paths to this CMakeLists.txt.
         videolib.cpp
+        video_playback.cpp
         # OpenGL ES preview pipeline (EGL renderer + GLES draw path). Header-only
         # render_thread_executor.h / gl_program.h are pulled in via includes.
         preview_renderer.cpp
