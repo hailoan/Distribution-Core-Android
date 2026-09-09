@@ -19,6 +19,8 @@ enum class PlaybackState {
     Idle,
     Starting,
     Playing,
+    Paused,
+    Seeking,
     Stopping,
     Completed,
     Failed,
@@ -57,9 +59,20 @@ public:
     // Returns a positive attempt ID when accepted, otherwise zero.
     uint64_t play(const std::string &path);
     void stop();
+    bool pause();
+    bool resume();
+    bool setLooping(bool enabled);
+    bool setPlaybackSpeed(double speed);
+    bool seekTo(int64_t positionMs);
     void release();
 
 private:
+    struct SeekRequest {
+        int64_t positionMs;
+        uint64_t id;
+        bool resumeAfter;
+    };
+
     std::optional<PlaybackErrorCode> decodeAttempt(
             uint64_t attemptId,
             const std::string &path);
@@ -69,7 +82,6 @@ private:
             std::optional<PlaybackErrorCode> error);
     bool markPlaying(uint64_t attemptId);
     bool isCancelled(uint64_t attemptId) const;
-    bool waitUntil(uint64_t attemptId, std::chrono::steady_clock::time_point deadline);
     void joinFinishedWorker();
 
     PlaybackTerminalCallback terminalCallback_;
@@ -77,7 +89,6 @@ private:
 
     mutable std::mutex stateMutex_;
     std::mutex rendererMutex_;
-    std::mutex waitMutex_;
     std::condition_variable waitCv_;
     std::thread worker_;
 
@@ -85,8 +96,15 @@ private:
     PlaybackState state_ = PlaybackState::Idle;
     uint64_t currentAttemptId_ = 0;
     uint64_t nextAttemptId_ = 1;
+    uint64_t nextSeekId_ = 1;
+    uint64_t latestSeekId_ = 0;
+    uint64_t controlVersion_ = 0;
     bool terminalClaimed_ = false;
     bool surfaceReady_ = false;
+    bool looping_ = false;
+    bool seekResumeAfter_ = true;
+    double playbackSpeed_ = 1.0;
+    std::optional<SeekRequest> pendingSeek_;
 };
 
 #endif // VIDEOLIB_VIDEO_PLAYBACK_H

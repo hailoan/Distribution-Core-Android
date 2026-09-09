@@ -97,6 +97,41 @@ class VideoPreview {
         }
     }
 
+    /** Pauses active playback after any frame already being presented. */
+    fun pause(): Boolean {
+        val handle = nativeHandle
+        if (handle == 0L || !surfaceAttached) return false
+        return nativePause(handle)
+    }
+
+    /** Resumes a paused playback attempt. */
+    fun resume(): Boolean {
+        val handle = nativeHandle
+        if (handle == 0L || !surfaceAttached) return false
+        return nativeResume(handle)
+    }
+
+    /** Enables or disables continuous replay for this preview instance. */
+    fun setLooping(enabled: Boolean): Boolean {
+        val handle = nativeHandle
+        if (handle == 0L) return false
+        return nativeSetLooping(handle, enabled)
+    }
+
+    /** Sets playback speed. Any finite value greater than or equal to 0.1 is accepted. */
+    fun setPlaybackSpeed(speed: Double): Boolean {
+        val handle = nativeHandle
+        if (handle == 0L || !speed.isFinite() || speed < MIN_PLAYBACK_SPEED) return false
+        return nativeSetPlaybackSpeed(handle, speed)
+    }
+
+    /** Seeks to [positionMs], clamped by native playback to the playable interval. */
+    fun seekTo(positionMs: Long): Boolean {
+        val handle = nativeHandle
+        if (handle == 0L || !surfaceAttached) return false
+        return nativeSeekTo(handle, positionMs)
+    }
+
     /**
      * Uploads and draws an RGBA8888 [frame] of [width] x [height].
      *
@@ -205,12 +240,18 @@ class VideoPreview {
     private external fun nativeSurfaceAvailable(handle: Long, surface: Surface): Boolean
     private external fun nativePlay(handle: Long, path: String): Long
     private external fun nativeStop(handle: Long)
+    private external fun nativePause(handle: Long): Boolean
+    private external fun nativeResume(handle: Long): Boolean
+    private external fun nativeSetLooping(handle: Long, enabled: Boolean): Boolean
+    private external fun nativeSetPlaybackSpeed(handle: Long, speed: Double): Boolean
+    private external fun nativeSeekTo(handle: Long, positionMs: Long): Boolean
     private external fun nativePushFrame(handle: Long, frame: ByteBuffer, width: Int, height: Int)
     private external fun nativeRequestPattern(handle: Long)
     private external fun nativeReleaseSurface(handle: Long)
     private external fun nativeDestroy(handle: Long)
 
     companion object {
+        private const val MIN_PLAYBACK_SPEED = 0.1
         private const val NO_ATTEMPT = 0L
         private const val NATIVE_ERROR_INPUT_OPEN = 1
         private const val NATIVE_ERROR_UNSUPPORTED_VIDEO = 2
