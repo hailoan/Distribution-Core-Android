@@ -24,104 +24,104 @@ extern "C" {
 
 namespace {
 
-constexpr AVRational kMicrosecondTimeBase{1, 1000000};
-constexpr int64_t kDefaultFrameDurationUs = 33333;
-constexpr int64_t kMaximumWaitChunkUs = 60000000;
+    constexpr AVRational kMicrosecondTimeBase{1, 1000000};
+    constexpr int64_t kDefaultFrameDurationUs = 33333;
+    constexpr int64_t kMaximumWaitChunkUs = 60000000;
 
-struct AttemptResources {
-    AVFormatContext *format = nullptr;
-    AVCodecContext *codec = nullptr;
-    AVPacket *packet = nullptr;
-    AVFrame *frame = nullptr;
-    SwsContext *sws = nullptr;
-    bool inputOpened = false;
+    struct AttemptResources {
+        AVFormatContext *format = nullptr;
+        AVCodecContext *codec = nullptr;
+        AVPacket *packet = nullptr;
+        AVFrame *frame = nullptr;
+        SwsContext *sws = nullptr;
+        bool inputOpened = false;
 
-    ~AttemptResources() {
-        sws_freeContext(sws);
-        av_frame_free(&frame);
-        av_packet_free(&packet);
-        avcodec_free_context(&codec);
-        if (format != nullptr) {
-            if (inputOpened) {
-                avformat_close_input(&format);
-            } else {
-                avformat_free_context(format);
-                format = nullptr;
+        ~AttemptResources() {
+            sws_freeContext(sws);
+            av_frame_free(&frame);
+            av_packet_free(&packet);
+            avcodec_free_context(&codec);
+            if (format != nullptr) {
+                if (inputOpened) {
+                    avformat_close_input(&format);
+                } else {
+                    avformat_free_context(format);
+                    format = nullptr;
+                }
             }
         }
-    }
-};
+    };
 
-bool isReadableLocalFile(const std::string &path) {
-    struct stat info {};
-    return path.find("://") == std::string::npos &&
-           stat(path.c_str(), &info) == 0 &&
-           S_ISREG(info.st_mode) &&
-           access(path.c_str(), R_OK) == 0;
-}
+    bool isReadableLocalFile(const std::string &path) {
+        struct stat info{};
+        return path.find("://") == std::string::npos &&
+               stat(path.c_str(), &info) == 0 &&
+               S_ISREG(info.st_mode) &&
+               access(path.c_str(), R_OK) == 0;
+    }
 
-int interruptInput(void *opaque) {
-    const auto *cancelled = static_cast<const std::atomic<bool> *>(opaque);
-    return cancelled != nullptr && cancelled->load(std::memory_order_acquire) ? 1 : 0;
-}
+    int interruptInput(void *opaque) {
+        const auto *cancelled = static_cast<const std::atomic<bool> *>(opaque);
+        return cancelled != nullptr && cancelled->load(std::memory_order_acquire) ? 1 : 0;
+    }
 
-bool inRange(float value, float minimum, float maximum) {
-    return std::isfinite(value) && value >= minimum && value <= maximum;
-}
+    bool inRange(float value, float minimum, float maximum) {
+        return std::isfinite(value) && value >= minimum && value <= maximum;
+    }
 
-AppearanceApplyResult validateAppearance(const AppearanceSnapshot &appearance) {
-    const auto &a = appearance.adjustments;
-    if (!inRange(a.brightness, -0.5f, 0.5f) ||
-        !inRange(a.contrast, 0.0f, 2.0f) ||
-        !inRange(a.saturation, 0.0f, 2.0f) ||
-        !inRange(a.exposure, -1.0f, 1.0f) ||
-        !inRange(a.darks, 0.5f, 1.5f) ||
-        !inRange(a.levelMinimum, -1.0f, 1.0f) ||
-        !inRange(a.levelGamma, 0.5f, 1.5f) ||
-        !inRange(a.levelMaximum, 0.5f, 1.5f) ||
-        !inRange(a.vignette, 0.0f, 1.0f) ||
-        !inRange(a.vibrance, -1.0f, 1.0f) ||
-        !inRange(a.temperature, -0.5f, 0.5f) ||
-        !inRange(a.hue, -1.0f, 1.0f) ||
-        !inRange(a.highlights, -2.0f, 2.0f) ||
-        !inRange(a.shadows, -1.0f, 1.0f) ||
-        !inRange(a.lights, 0.0f, 2.0f) ||
-        !inRange(a.clarity, -1.0f, 1.0f)) {
-        return AppearanceApplyResult::failure(AppearanceError::InvalidValue);
-    }
-    if (a.levelMinimum >= a.levelMaximum) {
-        return AppearanceApplyResult::failure(AppearanceError::InvalidLevels);
-    }
-    if (!appearance.filter) return AppearanceApplyResult::success();
-    const auto &filter = *appearance.filter;
-    if (filter.version != 1) {
-        return AppearanceApplyResult::failure(AppearanceError::UnsupportedFilterVersion);
-    }
-    if (!std::isfinite(filter.opacity) || filter.opacity < 0.0f || filter.opacity > 1.0f) {
-        return AppearanceApplyResult::failure(AppearanceError::InvalidFilterOpacity);
-    }
-    if (filter.source.empty() || filter.source.find("vec4") == std::string::npos ||
-        filter.source.find("addFilter") == std::string::npos ||
-        filter.source.find("#version") != std::string::npos ||
-        filter.source.find("void main") != std::string::npos ||
-        filter.source.find("u_texture") != std::string::npos ||
-        filter.source.find("v_texCoord") != std::string::npos ||
-        filter.source.find("fragColor") != std::string::npos) {
-        return AppearanceApplyResult::failure(AppearanceError::InvalidFilterSource);
-    }
-    for (const auto &texture : filter.textures) {
-        if (texture.width <= 0 || texture.height <= 0) {
-            return AppearanceApplyResult::failure(AppearanceError::InvalidFilterTexture);
+    AppearanceApplyResult validateAppearance(const AppearanceSnapshot &appearance) {
+        const auto &a = appearance.adjustments;
+        if (!inRange(a.brightness, -0.5f, 0.5f) ||
+            !inRange(a.contrast, 0.0f, 2.0f) ||
+            !inRange(a.saturation, 0.0f, 2.0f) ||
+            !inRange(a.exposure, -1.0f, 1.0f) ||
+            !inRange(a.darks, 0.5f, 1.5f) ||
+            !inRange(a.levelMinimum, -1.0f, 1.0f) ||
+            !inRange(a.levelGamma, 0.5f, 1.5f) ||
+            !inRange(a.levelMaximum, 0.5f, 1.5f) ||
+            !inRange(a.vignette, 0.0f, 1.0f) ||
+            !inRange(a.vibrance, -1.0f, 1.0f) ||
+            !inRange(a.temperature, -0.5f, 0.5f) ||
+            !inRange(a.hue, -1.0f, 1.0f) ||
+            !inRange(a.highlights, -2.0f, 2.0f) ||
+            !inRange(a.shadows, -1.0f, 1.0f) ||
+            !inRange(a.lights, 0.0f, 2.0f) ||
+            !inRange(a.clarity, -1.0f, 1.0f)) {
+            return AppearanceApplyResult::failure(AppearanceError::InvalidValue);
         }
-        const uint64_t expected = static_cast<uint64_t>(texture.width) *
-                                  static_cast<uint64_t>(texture.height) * 4U;
-        if (expected > std::numeric_limits<size_t>::max() ||
-            texture.rgba8888.size() != static_cast<size_t>(expected)) {
-            return AppearanceApplyResult::failure(AppearanceError::InvalidFilterTexture);
+        if (a.levelMinimum >= a.levelMaximum) {
+            return AppearanceApplyResult::failure(AppearanceError::InvalidLevels);
         }
+        if (!appearance.filter) return AppearanceApplyResult::success();
+        const auto &filter = *appearance.filter;
+        if (filter.version != 1) {
+            return AppearanceApplyResult::failure(AppearanceError::UnsupportedFilterVersion);
+        }
+        if (!std::isfinite(filter.opacity) || filter.opacity < 0.0f || filter.opacity > 1.0f) {
+            return AppearanceApplyResult::failure(AppearanceError::InvalidFilterOpacity);
+        }
+        if (filter.source.empty() || filter.source.find("vec4") == std::string::npos ||
+            filter.source.find("addFilter") == std::string::npos ||
+            filter.source.find("#version") != std::string::npos ||
+            filter.source.find("void main") != std::string::npos ||
+            filter.source.find("u_texture") != std::string::npos ||
+            filter.source.find("v_texCoord") != std::string::npos ||
+            filter.source.find("fragColor") != std::string::npos) {
+            return AppearanceApplyResult::failure(AppearanceError::InvalidFilterSource);
+        }
+        for (const auto &texture: filter.textures) {
+            if (texture.width <= 0 || texture.height <= 0) {
+                return AppearanceApplyResult::failure(AppearanceError::InvalidFilterTexture);
+            }
+            const uint64_t expected = static_cast<uint64_t>(texture.width) *
+                                      static_cast<uint64_t>(texture.height) * 4U;
+            if (expected > std::numeric_limits<size_t>::max() ||
+                texture.rgba8888.size() != static_cast<size_t>(expected)) {
+                return AppearanceApplyResult::failure(AppearanceError::InvalidFilterTexture);
+            }
+        }
+        return AppearanceApplyResult::success();
     }
-    return AppearanceApplyResult::success();
-}
 
 } // namespace
 
@@ -202,8 +202,8 @@ AppearanceApplyResult VideoPlayback::applyAppearance(
         if (state_ == PlaybackState::Released || !surfaceReady_) {
             return AppearanceApplyResult::failure(
                     state_ == PlaybackState::Released
-                        ? AppearanceError::Released
-                        : AppearanceError::SurfaceUnavailable);
+                    ? AppearanceError::Released
+                    : AppearanceError::SurfaceUnavailable);
         }
         appearance_ = appearance;
     }
@@ -576,8 +576,12 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
     std::chrono::steady_clock::time_point clockAnchorWall;
     std::vector<uint8_t> rgba;
 
-    enum class ScheduleResult { Present, Drop, Seek, Cancelled };
-    enum class DecodeFlow { NeedInput, Seek, Cancelled, DecodeError, RenderError };
+    enum class ScheduleResult {
+        Present, Drop, Seek, Cancelled
+    };
+    enum class DecodeFlow {
+        NeedInput, Seek, Cancelled, DecodeError, RenderError
+    };
 
     auto isActiveLocked = [&]() {
         return !cancelRequested_.load(std::memory_order_acquire) &&
@@ -763,7 +767,7 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
                     std::lock_guard<std::mutex> lock(stateMutex_);
                     if (isActiveLocked()) {
                         seekSuperseded = pendingSeek_.has_value() ||
-                                           (seeking && latestSeekId_ != activeSeekId);
+                                         (seeking && latestSeekId_ != activeSeekId);
                         retryAfterPause = !seeking && state_ == PlaybackState::Paused;
                         mayPresent = !seekSuperseded &&
                                      ((seeking && state_ == PlaybackState::Seeking) ||

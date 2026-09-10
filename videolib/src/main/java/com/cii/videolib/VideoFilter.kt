@@ -28,6 +28,14 @@ class VideoFilterTexture(
  * Trusted GLES 3.0 filter snippet. Version 1 source must define
  * `vec4 addFilter(vec4 inputColor, vec2 uv)` and may sample ordered auxiliary
  * textures named `u_filterTexture0`, `u_filterTexture1`, and so on.
+ *
+ * Version 1 also provides reusable color components: `hueToRgb`, `HSLtoRGB`,
+ * `RGBtoHSL`, the `vec3 vibranceAdjust` overload, `cubicPulse`, `mixColorRed`,
+ * `mixColorOrange`, `mixColorYellow`, `mixColorGreen`, `mixColorCyan`, and
+ * `mixColorBlue`, together with `FILTER_HUE_RANGE` and `current_hue`. A source
+ * that declares any of these names uses compatibility mode and must provide the
+ * complete component environment it needs; library and consumer declarations
+ * are not mixed.
  */
 class VideoFilter(
     val version: Int = VERSION_1,

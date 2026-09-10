@@ -12,10 +12,15 @@
 class GlProgram {
 public:
     bool init(const AppearanceSnapshot &appearance, AppearanceApplyResult *result);
+
     AppearanceApplyResult applyAppearance(const AppearanceSnapshot &appearance);
+
     void drawFrame(const uint8_t *pixels, int width, int height);
+
     void drawTestPattern();
+
     void release();
+
     bool isReady() const { return generation_.program != 0; }
 
 private:
@@ -34,10 +39,15 @@ private:
         std::optional<FilterDescriptor> filter;
     };
 
-    AppearanceApplyResult buildGeneration(const AppearanceSnapshot &appearance, Generation *candidate);
+    AppearanceApplyResult
+    buildGeneration(const AppearanceSnapshot &appearance, Generation *candidate);
+
     void releaseGeneration(Generation *generation);
+
     void bindAppearanceUniforms();
+
     void ensureTextureSize(int width, int height);
+
     void drawQuad();
 
     Generation generation_;

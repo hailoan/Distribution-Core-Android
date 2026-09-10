@@ -77,6 +77,7 @@ struct AppearanceApplyResult {
     bool accepted() const { return error == AppearanceError::None; }
 
     static AppearanceApplyResult success() { return {}; }
+
     static AppearanceApplyResult failure(AppearanceError error, std::string diagnostic = {}) {
         return {error, std::move(diagnostic)};
     }

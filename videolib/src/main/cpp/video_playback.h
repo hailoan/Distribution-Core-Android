@@ -46,26 +46,39 @@ using PlaybackTerminalCallback =
 class VideoPlayback {
 public:
     explicit VideoPlayback(PlaybackTerminalCallback terminalCallback);
+
     ~VideoPlayback();
 
     VideoPlayback(const VideoPlayback &) = delete;
+
     VideoPlayback &operator=(const VideoPlayback &) = delete;
 
     // Takes ownership of the acquired ANativeWindow reference.
     bool surfaceAvailable(ANativeWindow *window);
+
     bool pushFrame(const uint8_t *pixels, int width, int height);
+
     AppearanceApplyResult applyAppearance(const AppearanceSnapshot &appearance);
+
     void requestPattern();
+
     void releaseSurface();
 
     // Returns a positive attempt ID when accepted, otherwise zero.
     uint64_t play(const std::string &path);
+
     void stop();
+
     bool pause();
+
     bool resume();
+
     bool setLooping(bool enabled);
+
     bool setPlaybackSpeed(double speed);
+
     bool seekTo(int64_t positionMs);
+
     void release();
 
 private:
@@ -78,12 +91,17 @@ private:
     std::optional<PlaybackErrorCode> decodeAttempt(
             uint64_t attemptId,
             const std::string &path);
+
     void runAttempt(uint64_t attemptId, std::string path);
+
     void finishAttempt(
             uint64_t attemptId,
             std::optional<PlaybackErrorCode> error);
+
     bool markPlaying(uint64_t attemptId);
+
     bool isCancelled(uint64_t attemptId) const;
+
     void joinFinishedWorker();
 
     PlaybackTerminalCallback terminalCallback_;

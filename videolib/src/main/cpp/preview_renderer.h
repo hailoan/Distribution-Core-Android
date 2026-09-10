@@ -25,12 +25,16 @@
 
 class PreviewRenderer {
 public:
-    enum class State { Idle, Ready, Rendering, Released, Failed };
+    enum class State {
+        Idle, Ready, Rendering, Released, Failed
+    };
 
     PreviewRenderer() = default;
+
     ~PreviewRenderer();
 
     PreviewRenderer(const PreviewRenderer &) = delete;
+
     PreviewRenderer &operator=(const PreviewRenderer &) = delete;
 
     // Takes ownership of `window` (one ANativeWindow reference, released once in
@@ -55,6 +59,7 @@ public:
     void releaseSurface();
 
     State state() const { return state_; }
+
     bool isSurfaceReady() const {
         return state_ == State::Ready || state_ == State::Rendering;
     }
@@ -62,6 +67,7 @@ public:
 private:
     bool initEglLocked(const AppearanceSnapshot &appearance,
                        AppearanceApplyResult *result);
+
     void teardownEglLocked();   // render-thread body of releaseSurface
 
     RenderThreadExecutor executor_{"videolib_render"};

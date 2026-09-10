@@ -16,8 +16,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.cii.videolib.AppearanceUpdateResult
 import com.cii.videolib.PlaybackError
 import com.cii.videolib.PlaybackListener
+import com.cii.videolib.VideoFilter
 import com.cii.videolib.VideoPreview
 import com.google.android.material.switchmaterial.SwitchMaterial
 import java.io.File
@@ -133,6 +135,12 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
     override fun surfaceCreated(holder: SurfaceHolder) {
         surfaceAttached = videoPreview.attachSurface(holder.surface)
         if (surfaceAttached) {
+            if (videoPreview.setFilter(DEMO_VIDEO_FILTER) !== AppearanceUpdateResult.Accepted) {
+                videoPreview.detachSurface()
+                surfaceAttached = false
+                showStatus(R.string.video_status_render_error)
+                return
+            }
             if (cachedVideo == null) {
                 showStatus(R.string.video_status_no_selection)
             }
@@ -486,5 +494,30 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
         const val PROGRESS_UPDATE_INTERVAL_MS = 250L
         const val BRIGHTNESS_NEUTRAL_PROGRESS = 50
         const val BRIGHTNESS_OFFSET = 0.5f
+
+        val DEMO_VIDEO_FILTER = VideoFilter(
+            source = """
+                vec4 addFilter(vec4 color, vec2 uv) {
+                    color = exposureAdjust(color, 0.18);
+                    color = contrastAdjust(color, 0.755);
+                    color = shadowAdjust(color, 0.29);
+                    color = saturationAdjust(color, 0.84);
+                    color.rgb = vibranceAdjust(color.rgb, 0.24);
+                    color = hueAdjust(color, -0.15);
+                    color = temperatureAdjust(color, 0.25);
+
+                    vec3 hsl = RGBtoHSL(color.rgb);
+                    current_hue = hsl.x;
+                    hsl = mixColorRed(hsl, 1.46, 1.38, 1.0);
+                    hsl = mixColorOrange(hsl, 1.2, 0.79, 1.11);
+                    hsl = mixColorYellow(hsl, 1.0, 0.1, 1.12);
+                    hsl = mixColorGreen(hsl, 1.0, 0.09, 0.89);
+                    hsl = mixColorCyan(hsl, 1.29, 1.21, 1.0);
+                    hsl = mixColorBlue(hsl, 0.42, 1.26, 1.0);
+                    color.rgb = HSLtoRGB(hsl);
+                    return color;
+                }
+            """.trimIndent(),
+        )
     }
 }

@@ -19,11 +19,11 @@ set(FFMPEG_LIB_DIR ${FFMPEG_ROOT}/lib)
 include_directories(${FFMPEG_INCLUDE_DIR})
 
 # Import each archive as a STATIC IMPORTED target.
-foreach(fflib avdevice avfilter avformat avcodec swscale swresample avutil)
+foreach (fflib avdevice avfilter avformat avcodec swscale swresample avutil)
     add_library(${fflib} STATIC IMPORTED)
     set_target_properties(${fflib} PROPERTIES
             IMPORTED_LOCATION ${FFMPEG_LIB_DIR}/lib${fflib}.a)
-endforeach()
+endforeach ()
 
 # Creates the module's shared library. Gradle packages it into the AAR/APK and
 # it is loaded via System.loadLibrary("videolib").
@@ -41,9 +41,9 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
 # (libavutil/aarch64/tx_float_neon.S); without it the static link fails with
 # "R_AARCH64_ADR_PREL_PG_HI21 cannot be used against symbol 'ff_tx_tab_*_float'".
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
-if(ANDROID_ABI STREQUAL "arm64-v8a")
+if (ANDROID_ABI STREQUAL "arm64-v8a")
     target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-Wl,-Bsymbolic")
-endif()
+endif ()
 
 # Link the FFmpeg archives in dependency order (consumers before providers,
 # avutil last), wrapped in a link group so the linker rescans and resolves

@@ -36,6 +36,7 @@ public:
     }
 
     RenderThreadExecutor(const RenderThreadExecutor &) = delete;
+
     RenderThreadExecutor &operator=(const RenderThreadExecutor &) = delete;
 
     // Fire-and-forget: runs the task on the render thread; returns immediately.
