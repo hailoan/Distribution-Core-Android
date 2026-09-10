@@ -16,7 +16,9 @@ PreviewRenderer::~PreviewRenderer() {
     releaseSurface();
 }
 
-bool PreviewRenderer::initEglLocked() {
+bool PreviewRenderer::initEglLocked(
+        const AppearanceSnapshot &appearance,
+        AppearanceApplyResult *result) {
     display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (display_ == EGL_NO_DISPLAY) {
         LOGE("eglGetDisplay returned EGL_NO_DISPLAY");
@@ -64,7 +66,7 @@ bool PreviewRenderer::initEglLocked() {
     eglQuerySurface(display_, surface_, EGL_WIDTH, &width_);
     eglQuerySurface(display_, surface_, EGL_HEIGHT, &height_);
 
-    if (!glProgram_.init()) {
+    if (!glProgram_.init(appearance, result)) {
         LOGE("GL program init failed");
         return false;
     }
@@ -74,7 +76,9 @@ bool PreviewRenderer::initEglLocked() {
     return true;
 }
 
-bool PreviewRenderer::surfaceAvailable(ANativeWindow *window) {
+bool PreviewRenderer::surfaceAvailable(
+        ANativeWindow *window,
+        const AppearanceSnapshot &appearance) {
     if (window == nullptr) {
         LOGE("surfaceAvailable called with null window");
         return false;
@@ -86,7 +90,10 @@ bool PreviewRenderer::surfaceAvailable(ANativeWindow *window) {
     window_ = window; // take ownership of the one reference
 
     bool ok = false;
-    executor_.runSync([this, &ok] { ok = initEglLocked(); });
+    AppearanceApplyResult result;
+    executor_.runSync([this, &appearance, &result, &ok] {
+        ok = initEglLocked(appearance, &result);
+    });
 
     if (!ok) {
         state_ = State::Failed;
@@ -97,6 +104,24 @@ bool PreviewRenderer::surfaceAvailable(ANativeWindow *window) {
     }
     state_ = State::Ready;
     return true;
+}
+
+AppearanceApplyResult PreviewRenderer::applyAppearance(
+        const AppearanceSnapshot &appearance) {
+    if (!isSurfaceReady()) {
+        return AppearanceApplyResult::failure(AppearanceError::SurfaceUnavailable);
+    }
+    AppearanceApplyResult result;
+    executor_.runSync([this, &appearance, &result] {
+        if (eglMakeCurrent(display_, surface_, surface_, context_) != EGL_TRUE) {
+            result = AppearanceApplyResult::failure(
+                    AppearanceError::RenderFailure, "eglMakeCurrent failed");
+            return;
+        }
+        while (glGetError() != GL_NO_ERROR) {}
+        result = glProgram_.applyAppearance(appearance);
+    });
+    return result;
 }
 
 bool PreviewRenderer::pushFrame(const uint8_t *pixels, int width, int height) {

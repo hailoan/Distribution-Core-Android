@@ -65,6 +65,64 @@ int interruptInput(void *opaque) {
     return cancelled != nullptr && cancelled->load(std::memory_order_acquire) ? 1 : 0;
 }
 
+bool inRange(float value, float minimum, float maximum) {
+    return std::isfinite(value) && value >= minimum && value <= maximum;
+}
+
+AppearanceApplyResult validateAppearance(const AppearanceSnapshot &appearance) {
+    const auto &a = appearance.adjustments;
+    if (!inRange(a.brightness, -0.5f, 0.5f) ||
+        !inRange(a.contrast, 0.0f, 2.0f) ||
+        !inRange(a.saturation, 0.0f, 2.0f) ||
+        !inRange(a.exposure, -1.0f, 1.0f) ||
+        !inRange(a.darks, 0.5f, 1.5f) ||
+        !inRange(a.levelMinimum, -1.0f, 1.0f) ||
+        !inRange(a.levelGamma, 0.5f, 1.5f) ||
+        !inRange(a.levelMaximum, 0.5f, 1.5f) ||
+        !inRange(a.vignette, 0.0f, 1.0f) ||
+        !inRange(a.vibrance, -1.0f, 1.0f) ||
+        !inRange(a.temperature, -0.5f, 0.5f) ||
+        !inRange(a.hue, -1.0f, 1.0f) ||
+        !inRange(a.highlights, -2.0f, 2.0f) ||
+        !inRange(a.shadows, -1.0f, 1.0f) ||
+        !inRange(a.lights, 0.0f, 2.0f) ||
+        !inRange(a.clarity, -1.0f, 1.0f)) {
+        return AppearanceApplyResult::failure(AppearanceError::InvalidValue);
+    }
+    if (a.levelMinimum >= a.levelMaximum) {
+        return AppearanceApplyResult::failure(AppearanceError::InvalidLevels);
+    }
+    if (!appearance.filter) return AppearanceApplyResult::success();
+    const auto &filter = *appearance.filter;
+    if (filter.version != 1) {
+        return AppearanceApplyResult::failure(AppearanceError::UnsupportedFilterVersion);
+    }
+    if (!std::isfinite(filter.opacity) || filter.opacity < 0.0f || filter.opacity > 1.0f) {
+        return AppearanceApplyResult::failure(AppearanceError::InvalidFilterOpacity);
+    }
+    if (filter.source.empty() || filter.source.find("vec4") == std::string::npos ||
+        filter.source.find("addFilter") == std::string::npos ||
+        filter.source.find("#version") != std::string::npos ||
+        filter.source.find("void main") != std::string::npos ||
+        filter.source.find("u_texture") != std::string::npos ||
+        filter.source.find("v_texCoord") != std::string::npos ||
+        filter.source.find("fragColor") != std::string::npos) {
+        return AppearanceApplyResult::failure(AppearanceError::InvalidFilterSource);
+    }
+    for (const auto &texture : filter.textures) {
+        if (texture.width <= 0 || texture.height <= 0) {
+            return AppearanceApplyResult::failure(AppearanceError::InvalidFilterTexture);
+        }
+        const uint64_t expected = static_cast<uint64_t>(texture.width) *
+                                  static_cast<uint64_t>(texture.height) * 4U;
+        if (expected > std::numeric_limits<size_t>::max() ||
+            texture.rgba8888.size() != static_cast<size_t>(expected)) {
+            return AppearanceApplyResult::failure(AppearanceError::InvalidFilterTexture);
+        }
+    }
+    return AppearanceApplyResult::success();
+}
+
 } // namespace
 
 VideoPlayback::VideoPlayback(PlaybackTerminalCallback terminalCallback)
@@ -92,10 +150,15 @@ bool VideoPlayback::surfaceAvailable(ANativeWindow *window) {
         releaseSurface();
     }
 
+    AppearanceSnapshot retainedAppearance;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        retainedAppearance = appearance_;
+    }
     bool attached = false;
     {
         std::lock_guard<std::mutex> renderLock(rendererMutex_);
-        attached = renderer_.surfaceAvailable(window);
+        attached = renderer_.surfaceAvailable(window, retainedAppearance);
     }
     bool released = false;
     {
@@ -108,6 +171,43 @@ bool VideoPlayback::surfaceAvailable(ANativeWindow *window) {
         renderer_.releaseSurface();
     }
     return attached && !released;
+}
+
+AppearanceApplyResult VideoPlayback::applyAppearance(
+        const AppearanceSnapshot &appearance) {
+    AppearanceApplyResult validation = validateAppearance(appearance);
+    if (!validation.accepted()) return validation;
+
+    std::lock_guard<std::mutex> renderLock(rendererMutex_);
+    bool surfaceReady = false;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        if (state_ == PlaybackState::Released) {
+            return AppearanceApplyResult::failure(AppearanceError::Released);
+        }
+        surfaceReady = surfaceReady_;
+        if (!surfaceReady) {
+            if (appearance.filter && !(appearance.filter == appearance_.filter)) {
+                return AppearanceApplyResult::failure(AppearanceError::SurfaceUnavailable);
+            }
+            appearance_ = appearance;
+            return AppearanceApplyResult::success();
+        }
+    }
+
+    AppearanceApplyResult result = renderer_.applyAppearance(appearance);
+    if (!result.accepted()) return result;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        if (state_ == PlaybackState::Released || !surfaceReady_) {
+            return AppearanceApplyResult::failure(
+                    state_ == PlaybackState::Released
+                        ? AppearanceError::Released
+                        : AppearanceError::SurfaceUnavailable);
+        }
+        appearance_ = appearance;
+    }
+    return AppearanceApplyResult::success();
 }
 
 bool VideoPlayback::pushFrame(const uint8_t *pixels, int width, int height) {

@@ -39,6 +39,7 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
     private lateinit var timeView: TextView
     private lateinit var playPauseButton: Button
     private lateinit var loopSwitch: SwitchMaterial
+    private lateinit var brightnessValueView: TextView
 
     private var copyTask: Future<*>? = null
     private var cachedVideo: File? = null
@@ -95,8 +96,10 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
         timeView = findViewById(R.id.video_time)
         playPauseButton = findViewById(R.id.play_pause_button)
         loopSwitch = findViewById(R.id.loop_switch)
+        brightnessValueView = findViewById(R.id.brightness_value)
         surfaceView.holder.addCallback(this)
         configurePlaybackControls()
+        configureBrightnessControl()
         findViewById<Button>(R.id.pick_video_button).setOnClickListener {
             pickerOpen = true
             pickVideo.launch(arrayOf("video/*"))
@@ -379,6 +382,22 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
         })
     }
 
+    private fun configureBrightnessControl() {
+        val brightnessControl = findViewById<SeekBar>(R.id.brightness_control)
+        brightnessControl.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                val brightness = progress.toFloat() / seekBar.max - BRIGHTNESS_OFFSET
+                brightnessValueView.text = getString(R.string.video_brightness_value, brightness)
+                videoPreview.setBrightness(brightness)
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+
+            override fun onStopTrackingTouch(seekBar: SeekBar) = Unit
+        })
+        brightnessControl.progress = BRIGHTNESS_NEUTRAL_PROGRESS
+    }
+
     private fun updatePlaybackControlsEnabled(enabled: Boolean) {
         progressView.isEnabled = enabled
         playPauseButton.isEnabled = cachedVideo != null
@@ -465,5 +484,7 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
         const val VIDEO_CACHE_SUFFIX = ".video"
         const val COPY_BUFFER_SIZE = 64 * 1024
         const val PROGRESS_UPDATE_INTERVAL_MS = 250L
+        const val BRIGHTNESS_NEUTRAL_PROGRESS = 50
+        const val BRIGHTNESS_OFFSET = 0.5f
     }
 }

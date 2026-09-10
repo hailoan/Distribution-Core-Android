@@ -31,6 +31,8 @@ class VideoPreview {
 
     @Volatile
     private var surfaceAttached = false
+    var appearance: VideoAppearance = VideoAppearance()
+        private set
     private var startPending = false
     private var activeAttemptId = NO_ATTEMPT
     private var playbackListener: PlaybackListener? = null
@@ -124,6 +126,61 @@ class VideoPreview {
         if (handle == 0L || !speed.isFinite() || speed < MIN_PLAYBACK_SPEED) return false
         return nativeSetPlaybackSpeed(handle, speed)
     }
+
+    /** Applies one complete immutable appearance snapshot synchronously. */
+    fun setAppearance(appearance: VideoAppearance): AppearanceUpdateResult {
+        val handle = nativeHandle
+        if (handle == 0L) return rejected(AppearanceRejectionReason.RELEASED)
+        validate(appearance)?.let { return it }
+        if (appearance.filter != null &&
+            appearance.filter != this.appearance.filter &&
+            !surfaceAttached
+        ) {
+            return rejected(AppearanceRejectionReason.SURFACE_UNAVAILABLE)
+        }
+
+        val filter = appearance.filter
+        val nativeResult = nativeApplyAppearance(
+            handle = handle,
+            adjustments = appearance.adjustments.toNativeArray(),
+            filterVersion = filter?.version ?: NO_FILTER_VERSION,
+            filterSource = filter?.source,
+            filterOpacity = filter?.opacity ?: 1f,
+            textureWidths = filter?.textures?.map { it.width }?.toIntArray() ?: IntArray(0),
+            textureHeights = filter?.textures?.map { it.height }?.toIntArray() ?: IntArray(0),
+            textureBytes = filter?.textures?.map { it.copyRgba8888() }?.toTypedArray()
+                ?: emptyArray(),
+        )
+        return nativeResult.toPublicResult().also { result ->
+            if (result === AppearanceUpdateResult.Accepted) {
+                this.appearance = appearance
+            }
+        }
+    }
+
+    fun setAdjustments(adjustments: VideoAdjustments): AppearanceUpdateResult =
+        setAppearance(appearance.copy(adjustments = adjustments))
+
+    fun resetAdjustments(): AppearanceUpdateResult = setAdjustments(VideoAdjustments())
+
+    fun setBrightness(value: Float) = setAdjustments(appearance.adjustments.copy(brightness = value))
+    fun setContrast(value: Float) = setAdjustments(appearance.adjustments.copy(contrast = value))
+    fun setSaturation(value: Float) = setAdjustments(appearance.adjustments.copy(saturation = value))
+    fun setExposure(value: Float) = setAdjustments(appearance.adjustments.copy(exposure = value))
+    fun setDarks(value: Float) = setAdjustments(appearance.adjustments.copy(darks = value))
+    fun setLevels(value: VideoLevels) = setAdjustments(appearance.adjustments.copy(levels = value))
+    fun setVignette(value: Float) = setAdjustments(appearance.adjustments.copy(vignette = value))
+    fun setVibrance(value: Float) = setAdjustments(appearance.adjustments.copy(vibrance = value))
+    fun setTemperature(value: Float) = setAdjustments(appearance.adjustments.copy(temperature = value))
+    fun setHue(value: Float) = setAdjustments(appearance.adjustments.copy(hue = value))
+    fun setHighlights(value: Float) = setAdjustments(appearance.adjustments.copy(highlights = value))
+    fun setShadows(value: Float) = setAdjustments(appearance.adjustments.copy(shadows = value))
+    fun setLights(value: Float) = setAdjustments(appearance.adjustments.copy(lights = value))
+    fun setClarity(value: Float) = setAdjustments(appearance.adjustments.copy(clarity = value))
+
+    /** Installs [filter], or removes the active filter when it is null. */
+    fun setFilter(filter: VideoFilter?): AppearanceUpdateResult =
+        setAppearance(appearance.copy(filter = filter))
 
     /** Seeks to [positionMs], clamped by native playback to the playable interval. */
     fun seekTo(positionMs: Long): Boolean {
@@ -236,6 +293,84 @@ class VideoPreview {
         }
     }
 
+    private fun validate(candidate: VideoAppearance): AppearanceUpdateResult.Rejected? {
+        val valueError = candidate.adjustments.run {
+            listOf(
+                brightness to (-0.5f..0.5f),
+                contrast to (0f..2f),
+                saturation to (0f..2f),
+                exposure to (-1f..1f),
+                darks to (0.5f..1.5f),
+                vignette to (0f..1f),
+                vibrance to (-1f..1f),
+                temperature to (-0.5f..0.5f),
+                hue to (-1f..1f),
+                highlights to (-2f..2f),
+                shadows to (-1f..1f),
+                lights to (0f..2f),
+                clarity to (-1f..1f),
+                levels.minimumInput to (-1f..1f),
+                levels.gamma to (0.5f..1.5f),
+                levels.maximumInput to (0.5f..1.5f),
+            ).any { (value, range) -> !value.isFinite() || value !in range }
+        }
+        if (valueError) return rejected(AppearanceRejectionReason.INVALID_VALUE)
+        if (candidate.adjustments.levels.minimumInput >= candidate.adjustments.levels.maximumInput) {
+            return rejected(AppearanceRejectionReason.INVALID_LEVELS)
+        }
+
+        val filter = candidate.filter ?: return null
+        if (filter.version != VideoFilter.VERSION_1) {
+            return rejected(AppearanceRejectionReason.UNSUPPORTED_FILTER_VERSION)
+        }
+        if (!filter.opacity.isFinite() || filter.opacity !in 0f..1f) {
+            return rejected(AppearanceRejectionReason.INVALID_FILTER_OPACITY)
+        }
+        if (!FILTER_ENTRY_POINT.containsMatchIn(filter.source) ||
+            RESERVED_FILTER_SOURCE.any { filter.source.contains(it) }
+        ) {
+            return rejected(AppearanceRejectionReason.INVALID_FILTER_SOURCE)
+        }
+        if (filter.textures.any { texture ->
+                val expected = texture.width.toLong() * texture.height.toLong() * RGBA_CHANNELS
+                texture.width <= 0 || texture.height <= 0 ||
+                    expected > Int.MAX_VALUE || texture.rgba8888.size.toLong() != expected
+            }
+        ) {
+            return rejected(AppearanceRejectionReason.INVALID_FILTER_TEXTURE)
+        }
+        return null
+    }
+
+    private fun VideoAdjustments.toNativeArray() = floatArrayOf(
+        brightness,
+        contrast,
+        saturation,
+        exposure,
+        darks,
+        levels.minimumInput,
+        levels.gamma,
+        levels.maximumInput,
+        vignette,
+        vibrance,
+        temperature,
+        hue,
+        highlights,
+        shadows,
+        lights,
+        clarity,
+    )
+
+    private fun NativeAppearanceResult.toPublicResult(): AppearanceUpdateResult {
+        if (code == NATIVE_APPEARANCE_ACCEPTED) return AppearanceUpdateResult.Accepted
+        val reason = AppearanceRejectionReason.entries.getOrNull(code - 1)
+            ?: AppearanceRejectionReason.RENDER_FAILURE
+        return AppearanceUpdateResult.Rejected(reason, diagnostic)
+    }
+
+    private fun rejected(reason: AppearanceRejectionReason) =
+        AppearanceUpdateResult.Rejected(reason)
+
     private external fun nativeCreate(): Long
     private external fun nativeSurfaceAvailable(handle: Long, surface: Surface): Boolean
     private external fun nativePlay(handle: Long, path: String): Long
@@ -245,6 +380,16 @@ class VideoPreview {
     private external fun nativeSetLooping(handle: Long, enabled: Boolean): Boolean
     private external fun nativeSetPlaybackSpeed(handle: Long, speed: Double): Boolean
     private external fun nativeSeekTo(handle: Long, positionMs: Long): Boolean
+    private external fun nativeApplyAppearance(
+        handle: Long,
+        adjustments: FloatArray,
+        filterVersion: Int,
+        filterSource: String?,
+        filterOpacity: Float,
+        textureWidths: IntArray,
+        textureHeights: IntArray,
+        textureBytes: Array<ByteArray>,
+    ): NativeAppearanceResult
     private external fun nativePushFrame(handle: Long, frame: ByteBuffer, width: Int, height: Int)
     private external fun nativeRequestPattern(handle: Long)
     private external fun nativeReleaseSurface(handle: Long)
@@ -256,6 +401,19 @@ class VideoPreview {
         private const val NATIVE_ERROR_INPUT_OPEN = 1
         private const val NATIVE_ERROR_UNSUPPORTED_VIDEO = 2
         private const val NATIVE_ERROR_RENDER = 4
+        private const val NATIVE_APPEARANCE_ACCEPTED = 0
+        private const val NO_FILTER_VERSION = 0
+        private const val RGBA_CHANNELS = 4L
+        private val FILTER_ENTRY_POINT = Regex(
+            """\bvec4\s+addFilter\s*\(\s*vec4\s+\w+\s*,\s*vec2\s+\w+\s*\)""",
+        )
+        private val RESERVED_FILTER_SOURCE = listOf(
+            "#version",
+            "void main",
+            "u_texture",
+            "v_texCoord",
+            "fragColor",
+        )
 
         init {
             System.loadLibrary("videolib")

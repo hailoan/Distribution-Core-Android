@@ -20,6 +20,7 @@
 #include <memory>
 
 #include "gl_program.h"
+#include "appearance.h"
 #include "render_thread_executor.h"
 
 class PreviewRenderer {
@@ -35,7 +36,11 @@ public:
     // Takes ownership of `window` (one ANativeWindow reference, released once in
     // releaseSurface). Initializes EGL + GL program on the render thread.
     // Returns false if the window is null or EGL/GL init fails (-> Failed).
-    bool surfaceAvailable(ANativeWindow *window);
+    bool surfaceAvailable(ANativeWindow *window, const AppearanceSnapshot &appearance);
+
+    // Synchronously applies a complete appearance while the EGL context is
+    // current. Candidate failures leave the prior generation active.
+    AppearanceApplyResult applyAppearance(const AppearanceSnapshot &appearance);
 
     // Uploads and draws a host RGBA8888 frame. Returns false unless the frame
     // was presented successfully while Ready/Rendering.
@@ -55,7 +60,8 @@ public:
     }
 
 private:
-    bool initEglLocked();       // render-thread body of surfaceAvailable
+    bool initEglLocked(const AppearanceSnapshot &appearance,
+                       AppearanceApplyResult *result);
     void teardownEglLocked();   // render-thread body of releaseSurface
 
     RenderThreadExecutor executor_{"videolib_render"};

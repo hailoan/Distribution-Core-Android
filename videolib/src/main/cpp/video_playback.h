@@ -14,6 +14,7 @@
 #include <thread>
 
 #include "preview_renderer.h"
+#include "appearance.h"
 
 enum class PlaybackState {
     Idle,
@@ -53,6 +54,7 @@ public:
     // Takes ownership of the acquired ANativeWindow reference.
     bool surfaceAvailable(ANativeWindow *window);
     bool pushFrame(const uint8_t *pixels, int width, int height);
+    AppearanceApplyResult applyAppearance(const AppearanceSnapshot &appearance);
     void requestPattern();
     void releaseSurface();
 
@@ -86,6 +88,7 @@ private:
 
     PlaybackTerminalCallback terminalCallback_;
     PreviewRenderer renderer_;
+    AppearanceSnapshot appearance_;
 
     mutable std::mutex stateMutex_;
     std::mutex rendererMutex_;
