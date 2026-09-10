@@ -259,6 +259,7 @@ uint64_t VideoPlayback::play(const std::string &path) {
     if (attemptId == 0) {
         attemptId = nextAttemptId_++;
     }
+    currentKind_ = PlaybackKind::Single;
     currentAttemptId_ = attemptId;
     terminalClaimed_ = false;
     pendingSeek_.reset();
@@ -268,6 +269,39 @@ uint64_t VideoPlayback::play(const std::string &path) {
 
     try {
         worker_ = std::thread(&VideoPlayback::runAttempt, this, attemptId, path);
+    } catch (...) {
+        currentAttemptId_ = 0;
+        terminalClaimed_ = false;
+        state_ = PlaybackState::Idle;
+        return 0;
+    }
+    return attemptId;
+}
+
+uint64_t VideoPlayback::playTimeline(std::vector<TimelineSegment> segments) {
+    joinFinishedWorker();
+
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    if (state_ == PlaybackState::Released || !surfaceReady_ || segments.empty() ||
+        currentAttemptId_ != 0 || worker_.joinable()) {
+        return 0;
+    }
+
+    uint64_t attemptId = nextAttemptId_++;
+    if (attemptId == 0) {
+        attemptId = nextAttemptId_++;
+    }
+    currentKind_ = PlaybackKind::Timeline;
+    currentAttemptId_ = attemptId;
+    terminalClaimed_ = false;
+    pendingSeek_.reset();
+    ++controlVersion_;
+    cancelRequested_.store(false, std::memory_order_release);
+    state_ = PlaybackState::Starting;
+
+    try {
+        worker_ = std::thread(&VideoPlayback::runTimeline, this, attemptId,
+                              std::move(segments));
     } catch (...) {
         currentAttemptId_ = 0;
         terminalClaimed_ = false;
@@ -405,6 +439,7 @@ bool VideoPlayback::seekTo(int64_t positionMs) {
 void VideoPlayback::releaseSurface() {
     std::thread activeWorker;
     PlaybackTerminalCallback callback;
+    PlaybackKind failedKind = PlaybackKind::Single;
     uint64_t failedAttemptId = 0;
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
@@ -414,6 +449,7 @@ void VideoPlayback::releaseSurface() {
         if (state_ != PlaybackState::Released && currentAttemptId_ != 0 && !terminalClaimed_) {
             terminalClaimed_ = true;
             failedAttemptId = currentAttemptId_;
+            failedKind = currentKind_;
             currentAttemptId_ = 0;
             state_ = PlaybackState::Stopping;
             cancelRequested_.store(true, std::memory_order_release);
@@ -439,7 +475,7 @@ void VideoPlayback::releaseSurface() {
         cancelRequested_.store(false, std::memory_order_release);
     }
     if (failedAttemptId != 0 && callback) {
-        callback(failedAttemptId, PlaybackErrorCode::Render);
+        callback(failedAttemptId, failedKind, PlaybackErrorCode::Render, -1);
     }
 }
 
@@ -491,7 +527,12 @@ bool VideoPlayback::isCancelled(uint64_t attemptId) const {
 
 std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
         uint64_t attemptId,
-        const std::string &path) {
+        const std::string &path,
+        int64_t startMs,
+        int64_t endMs,
+        double speed,
+        const std::optional<AppearanceSnapshot> &appearance,
+        bool honorLooping) {
     if (!isReadableLocalFile(path)) {
         return PlaybackErrorCode::InputOpen;
     }
@@ -538,6 +579,27 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
     }
     if (!markPlaying(attemptId)) {
         return PlaybackErrorCode::Decode;
+    }
+
+    // Per-segment appearance and speed for a timeline segment. Applied after
+    // the segment's decoder is ready but before its first frame is presented,
+    // so each segment renders with its own look and rate (AC-4, AC-5). The
+    // single-clip path passes no appearance and speed 0.0 (leave as-is).
+    if (appearance.has_value()) {
+        std::lock_guard<std::mutex> renderLock(rendererMutex_);
+        if (isCancelled(attemptId)) {
+            return PlaybackErrorCode::Decode;
+        }
+        if (!renderer_.applyAppearance(*appearance).accepted()) {
+            return PlaybackErrorCode::Render;
+        }
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        appearance_ = *appearance;
+    }
+    if (speed > 0.0) {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        playbackSpeed_ = speed;
+        ++controlVersion_;
     }
 
     AVRational guessedRate = av_guess_frame_rate(resources.format, stream, nullptr);

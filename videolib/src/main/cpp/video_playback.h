@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "preview_renderer.h"
 #include "appearance.h"
@@ -36,13 +37,31 @@ enum class PlaybackErrorCode : int {
     Render = 4,
 };
 
-// A missing error denotes natural completion.
-using PlaybackTerminalCallback =
-        std::function<void(uint64_t, std::optional<PlaybackErrorCode>)>;
+// Distinguishes a single-clip attempt (play) from an ordered timeline attempt
+// (playTimeline) so the JNI bridge routes the terminal event to the matching
+// Kotlin callback family.
+enum class PlaybackKind { Single, Timeline };
 
-// Per-VideoPreview native owner. It coordinates exactly one playback attempt,
-// owns the existing renderer, and keeps FFmpeg work off both JNI callers and
-// the EGL/GLES executor.
+// One trimmed segment of a sequential timeline. startMs is the inclusive start
+// (A); endMs is the exclusive end (B), or a negative value for "the natural end
+// of the file". speed and appearance apply only while this segment presents.
+struct TimelineSegment {
+    std::string path;
+    int64_t startMs = 0;
+    int64_t endMs = -1;
+    double speed = 1.0;
+    AppearanceSnapshot appearance;
+};
+
+// A missing error denotes natural completion. segmentIndex identifies the
+// failing timeline segment (0-based); it is -1 for single-clip attempts and for
+// timeline completion.
+using PlaybackTerminalCallback =
+        std::function<void(uint64_t, PlaybackKind, std::optional<PlaybackErrorCode>, int)>;
+
+// Per-VideoPreview native owner. It coordinates exactly one playback attempt
+// (single clip or an ordered timeline), owns the existing renderer, and keeps
+// FFmpeg work off both JNI callers and the EGL/GLES executor.
 class VideoPlayback {
 public:
     explicit VideoPlayback(PlaybackTerminalCallback terminalCallback);
@@ -67,6 +86,12 @@ public:
     // Returns a positive attempt ID when accepted, otherwise zero.
     uint64_t play(const std::string &path);
 
+    // Starts an ordered timeline attempt: each segment's [startMs, endMs)
+    // interval is presented back-to-back on the shared surface with its own
+    // appearance and speed. Returns a positive attempt ID when accepted,
+    // otherwise zero. Exactly one terminal event is reported.
+    uint64_t playTimeline(std::vector<TimelineSegment> segments);
+
     void stop();
 
     bool pause();
@@ -88,15 +113,29 @@ private:
         bool resumeAfter;
     };
 
+    // Presents one clip. When [startMs, endMs) is a bounded window the decoder
+    // seeks to startMs, skips until it, and stops before endMs; the default
+    // window (0, -1) reproduces the whole-file single-clip path. appearance,
+    // when present, is applied before the first presented frame; looping_ is
+    // honored only when honorLooping is true (single-clip attempts).
     std::optional<PlaybackErrorCode> decodeAttempt(
             uint64_t attemptId,
-            const std::string &path);
+            const std::string &path,
+            int64_t startMs,
+            int64_t endMs,
+            double speed,
+            const std::optional<AppearanceSnapshot> &appearance,
+            bool honorLooping);
 
     void runAttempt(uint64_t attemptId, std::string path);
 
+    void runTimeline(uint64_t attemptId, std::vector<TimelineSegment> segments);
+
     void finishAttempt(
             uint64_t attemptId,
-            std::optional<PlaybackErrorCode> error);
+            PlaybackKind kind,
+            std::optional<PlaybackErrorCode> error,
+            int segmentIndex);
 
     bool markPlaying(uint64_t attemptId);
 
@@ -115,6 +154,7 @@ private:
 
     std::atomic<bool> cancelRequested_{false};
     PlaybackState state_ = PlaybackState::Idle;
+    PlaybackKind currentKind_ = PlaybackKind::Single;
     uint64_t currentAttemptId_ = 0;
     uint64_t nextAttemptId_ = 1;
     uint64_t nextSeekId_ = 1;
