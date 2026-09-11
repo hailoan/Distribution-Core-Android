@@ -1,5 +1,7 @@
 package com.chiistudio.library
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
@@ -14,14 +16,19 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.cii.videolib.ExportError
+import com.cii.videolib.ExportListener
 import com.cii.videolib.PlaybackError
 import com.cii.videolib.TimelineListener
 import com.cii.videolib.VideoAppearance
+import com.cii.videolib.VideoExporter
 import com.cii.videolib.VideoFilter
 import com.cii.videolib.VideoPreview
 import com.cii.videolib.VideoSegment
@@ -63,6 +70,7 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val fileExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val videoPreview = VideoPreview()
+    private val videoExporter = VideoExporter()
 
     private lateinit var surfaceView: SurfaceView
     private lateinit var statusView: TextView
@@ -70,6 +78,8 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
     private lateinit var timeView: TextView
     private lateinit var playPauseButton: Button
     private lateinit var loopSwitch: SwitchMaterial
+    private lateinit var exportButton: Button
+    private lateinit var exportAudioSwitch: SwitchMaterial
     private lateinit var clipListHeader: TextView
     private lateinit var clipListContainer: LinearLayout
 
@@ -89,6 +99,13 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
     private var timelinePositionMs = 0L
     private var progressAnchorElapsedMs = 0L
 
+    // Export state. The exporter reports one terminal outcome for the whole
+    // timeline; the shown percentage is a wall-clock estimate over the same
+    // effective duration used for the preview progress bar.
+    private var exportActive = false
+    private var exportOutput: File? = null
+    private var exportAnchorElapsedMs = 0L
+
     private val progressUpdate = object : Runnable {
         override fun run() {
             if (timelineActive && !timelinePaused && !userSeeking) {
@@ -102,6 +119,24 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
             if (timelineActive) {
                 mainHandler.postDelayed(this, PROGRESS_UPDATE_INTERVAL_MS)
             }
+        }
+    }
+
+    // Wall-clock export progress estimate. The library reports one terminal
+    // outcome, not per-frame progress, so this is only an indicative percentage
+    // capped below 100% until the real completion callback arrives.
+    private val exportProgressUpdate = object : Runnable {
+        override fun run() {
+            if (!exportActive) return
+            if (timelineDurationMs > 0L) {
+                val elapsed = (SystemClock.elapsedRealtime() - exportAnchorElapsedMs)
+                    .coerceAtLeast(0L)
+                val percent = (elapsed * 100L / timelineDurationMs).coerceIn(0L, 99L)
+                statusView.text = getString(R.string.video_status_exporting, percent.toInt())
+            } else {
+                showStatus(R.string.video_status_exporting_indeterminate)
+            }
+            mainHandler.postDelayed(this, PROGRESS_UPDATE_INTERVAL_MS)
         }
     }
 
@@ -131,10 +166,13 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
         timeView = findViewById(R.id.video_time)
         playPauseButton = findViewById(R.id.play_pause_button)
         loopSwitch = findViewById(R.id.loop_switch)
+        exportButton = findViewById(R.id.export_button)
+        exportAudioSwitch = findViewById(R.id.export_audio_switch)
         clipListHeader = findViewById(R.id.clip_list_header)
         clipListContainer = findViewById(R.id.clip_list)
         surfaceView.holder.addCallback(this)
         configurePlaybackControls()
+        exportButton.setOnClickListener { onExportClicked() }
         findViewById<Button>(R.id.pick_video_button).setOnClickListener {
             pickerOpen = true
             pickVideos.launch(arrayOf("video/*"))
@@ -192,6 +230,9 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
         copyGeneration += 1
         fileExecutor.shutdownNow()
         stopProgressUpdates()
+        stopExportProgressUpdates()
+        videoExporter.release()
+        exportActive = false
         videoPreview.stop()
         if (surfaceAttached) {
             videoPreview.detachSurface()
@@ -200,6 +241,8 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
         videoPreview.release()
         clips.forEach { it.cachedFile.delete() }
         clips.clear()
+        // Best-effort cleanup of exported demo files.
+        File(cacheDir, EXPORT_CACHE_DIRECTORY).listFiles()?.forEach { it.delete() }
         super.onDestroy()
     }
 
@@ -362,6 +405,7 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
             timelinePositionMs = 0L
             progressAnchorElapsedMs = SystemClock.elapsedRealtime()
             updatePlayPauseButton()
+            updateExportControls()
             showPlaybackPosition(timelinePositionMs)
             startProgressUpdates()
             showActiveClipStatus(0L)
@@ -380,6 +424,7 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
             showPlaybackPosition(timelinePositionMs)
         }
         updatePlayPauseButton()
+        updateExportControls()
     }
 
     private fun showSegmentError(error: PlaybackError, segmentIndex: Int) {
@@ -400,6 +445,148 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
             PlaybackError.UNSUPPORTED_VIDEO -> R.string.video_status_unsupported
             PlaybackError.DECODE -> R.string.video_status_decode_error
             PlaybackError.RENDER -> R.string.video_status_render_error
+        }
+
+    // --- Export (VideoExporter demo) -----------------------------------------
+
+    /**
+     * Exports the current timeline — the same clips, trims, per-clip speed, and
+     * filter the user built for preview — to an MP4 via [VideoExporter]. Export
+     * is headless, so it runs without the preview surface; the preview is stopped
+     * first only to keep the demo's single status line unambiguous.
+     */
+    private fun onExportClicked() {
+        if (exportActive) {
+            // cancel() suppresses the terminal callback, so reset the UI here and
+            // remove the partial output file.
+            videoExporter.cancel()
+            exportOutput?.delete()
+            finishExport()
+            showStatus(R.string.video_status_export_cancelled)
+            return
+        }
+        if (clips.isEmpty()) return
+
+        val exportsDir = File(cacheDir, EXPORT_CACHE_DIRECTORY)
+        if (!exportsDir.exists() && !exportsDir.mkdirs()) {
+            showStatus(R.string.video_status_export_start_error)
+            return
+        }
+        val output = File(exportsDir, "export_${System.currentTimeMillis()}.mp4")
+
+        // The same segment mapping used for preview (tryStartPlayback), so the
+        // exported file reflects exactly what was previewed.
+        val segments = clips.map { clip ->
+            VideoSegment(
+                path = clip.cachedFile.absolutePath,
+                startMs = clip.startMs,
+                endMs = clip.endMs,
+                speed = clip.speed,
+                appearance = if (clip.filterEnabled) FILTERED_APPEARANCE else VideoAppearance(),
+            )
+        }
+
+        // Stop any active preview before exporting so the status line is clear.
+        if (timelineActive) {
+            stopTimelinePlayback(resetToStart = true)
+            timelinePending = true
+        }
+
+        val generation = copyGeneration
+        val accepted = videoExporter.exportTimeline(
+            segments = segments,
+            outputPath = output.absolutePath,
+            includeAudio = exportAudioSwitch.isChecked,
+            listener = object : ExportListener {
+                override fun onExportCompleted() {
+                    if (generation != copyGeneration || isDestroyed) return
+                    finishExport()
+                    statusView.text =
+                        getString(R.string.video_status_export_completed, output.name)
+                    offerToOpen(output)
+                }
+
+                override fun onExportError(error: ExportError, segmentIndex: Int) {
+                    if (generation != copyGeneration || isDestroyed) return
+                    finishExport()
+                    output.delete()
+                    val reason = getString(error.statusMessage)
+                    statusView.text = if (segmentIndex < 0) {
+                        getString(R.string.video_status_export_error, reason)
+                    } else {
+                        getString(
+                            R.string.video_status_export_segment_error,
+                            segmentIndex + 1,
+                            reason,
+                        )
+                    }
+                }
+            },
+        )
+        if (accepted) {
+            exportActive = true
+            exportOutput = output
+            exportAnchorElapsedMs = SystemClock.elapsedRealtime()
+            updateExportControls()
+            startExportProgressUpdates()
+        } else {
+            showStatus(R.string.video_status_export_start_error)
+        }
+    }
+
+    private fun finishExport() {
+        stopExportProgressUpdates()
+        exportActive = false
+        exportOutput = null
+        updateExportControls()
+    }
+
+    private fun offerToOpen(file: File) {
+        val uri: Uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        val view = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "video/mp4")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(view, getString(R.string.video_export_open_chooser))
+        try {
+            startActivity(chooser)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, R.string.video_export_open_error, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateExportControls() {
+        // Export is headless and independent of preview: allow it whenever there
+        // are clips (onExportClicked stops any active preview first). While an
+        // export runs, the button becomes a Cancel action.
+        exportButton.isEnabled = exportActive || clips.isNotEmpty()
+        exportButton.setText(
+            if (exportActive) R.string.video_export_cancel else R.string.video_export,
+        )
+        exportAudioSwitch.isEnabled = !exportActive
+        // Play/pause is disabled while exporting to keep the single status line
+        // unambiguous.
+        playPauseButton.isEnabled = !exportActive && clips.isNotEmpty()
+    }
+
+    private fun startExportProgressUpdates() {
+        mainHandler.removeCallbacks(exportProgressUpdate)
+        mainHandler.post(exportProgressUpdate)
+    }
+
+    private fun stopExportProgressUpdates() {
+        mainHandler.removeCallbacks(exportProgressUpdate)
+    }
+
+    private val ExportError.statusMessage: Int
+        get() = when (this) {
+            ExportError.INPUT_OPEN -> R.string.video_export_error_input
+            ExportError.UNSUPPORTED_VIDEO -> R.string.video_export_error_unsupported
+            ExportError.DECODE -> R.string.video_export_error_decode
+            ExportError.RENDER -> R.string.video_export_error_render
+            ExportError.ENCODE -> R.string.video_export_error_encode
+            ExportError.MUX -> R.string.video_export_error_mux
+            ExportError.OUTPUT -> R.string.video_export_error_output
         }
 
     private fun showStatus(message: Int) {
@@ -580,8 +767,9 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
 
     private fun updatePlaybackControlsEnabled(enabled: Boolean) {
         progressView.isEnabled = false
-        playPauseButton.isEnabled = enabled
+        playPauseButton.isEnabled = enabled && !exportActive
         updatePlayPauseButton()
+        updateExportControls()
     }
 
     private fun updatePlayPauseButton() {
@@ -679,6 +867,7 @@ class MainActivity2 : AppCompatActivity(), SurfaceHolder.Callback {
         const val VIDEO_CACHE_DIRECTORY = "video_preview"
         const val VIDEO_CACHE_PREFIX = "selected_"
         const val VIDEO_CACHE_SUFFIX = ".video"
+        const val EXPORT_CACHE_DIRECTORY = "exports"
         const val COPY_BUFFER_SIZE = 64 * 1024
         const val PROGRESS_UPDATE_INTERVAL_MS = 250L
         const val SPEED_STEPS = 190

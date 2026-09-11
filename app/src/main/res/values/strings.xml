@@ -34,4 +34,26 @@
     <string name="video_status_decode_error">A clip could not be decoded.</string>
     <string name="video_status_render_error">The video preview could not be rendered.</string>
     <string name="video_status_segment_error">Clip %1$d failed: %2$s</string>
+
+    <!-- Export (VideoExporter demo) -->
+    <string name="video_export">Export</string>
+    <string name="video_export_cancel">Cancel export</string>
+    <string name="video_export_include_audio">Include audio</string>
+    <string name="video_status_exporting">Exporting timeline… %1$d%%</string>
+    <string name="video_status_exporting_indeterminate">Exporting timeline…</string>
+    <string name="video_status_export_completed">Export complete: %1$s</string>
+    <string name="video_status_export_cancelled">Export cancelled.</string>
+    <string name="video_status_export_start_error">Could not start the export.</string>
+    <string name="video_status_export_error">Export failed: %1$s</string>
+    <string name="video_status_export_segment_error">Export failed on clip %1$d: %2$s</string>
+    <string name="video_export_open">Open</string>
+    <string name="video_export_open_chooser">Open exported video</string>
+    <string name="video_export_open_error">No app can open the exported video.</string>
+    <string name="video_export_error_input">a clip could not be opened</string>
+    <string name="video_export_error_unsupported">a clip format is not supported</string>
+    <string name="video_export_error_decode">a clip could not be decoded</string>
+    <string name="video_export_error_render">the effect could not be rendered</string>
+    <string name="video_export_error_encode">the video could not be encoded</string>
+    <string name="video_export_error_mux">the output file could not be written</string>
+    <string name="video_export_error_output">the output file could not be created</string>
 </resources>
