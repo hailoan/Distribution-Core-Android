@@ -617,6 +617,23 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
         durationUs = av_rescale_q(stream->duration, stream->time_base, kMicrosecondTimeBase);
     }
 
+    // Segment window in the stream-relative mediaUs space. startMs (A) is the
+    // inclusive lower bound; endMs (B) is the exclusive upper bound, or a
+    // negative value for "play to the natural end". The single-clip path passes
+    // (0, -1), leaving both bounds inert.
+    const int64_t segmentStartUs =
+            startMs > 0
+            ? (startMs > std::numeric_limits<int64_t>::max() / 1000
+               ? std::numeric_limits<int64_t>::max()
+               : startMs * 1000)
+            : 0;
+    const int64_t segmentEndUs =
+            endMs >= 0
+            ? (endMs > std::numeric_limits<int64_t>::max() / 1000
+               ? std::numeric_limits<int64_t>::max()
+               : endMs * 1000)
+            : -1;
+
     bool clockStarted = false;
     bool hasTimelineStart = stream->start_time != AV_NOPTS_VALUE;
     bool presentedAnyFrame = false;
@@ -642,7 +659,7 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
         Present, Drop, Seek, Cancelled
     };
     enum class DecodeFlow {
-        NeedInput, Seek, Cancelled, DecodeError, RenderError
+        NeedInput, Seek, Cancelled, DecodeError, RenderError, EndOfSegment
     };
 
     auto isActiveLocked = [&]() {
@@ -906,6 +923,23 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
             }
             lastMediaUs = mediaUs;
 
+            // Enforce the segment end (B): stop before the first frame whose
+            // presentation timestamp reaches the exclusive upper bound so that
+            // [A, B) is presented and the timeline advances (AC-3). A negative
+            // segmentEndUs (single-clip / open-ended segment) never triggers.
+            if (segmentEndUs >= 0 && mediaUs >= segmentEndUs) {
+                av_frame_unref(resources.frame);
+                return DecodeFlow::EndOfSegment;
+            }
+
+            // Enforce the segment start (A): drop frames decoded between the
+            // seek keyframe and A so presentation begins at A (AC-2). The
+            // single-clip path uses segmentStartUs 0 and never drops here.
+            if (mediaUs < segmentStartUs) {
+                av_frame_unref(resources.frame);
+                continue;
+            }
+
             if (seeking && mediaUs < seekTargetUs) {
                 bool superseded = false;
                 {
@@ -926,6 +960,16 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
         }
         return DecodeFlow::Cancelled;
     };
+
+    // Enforce the segment start (A): seek backward to the keyframe at or before
+    // A so the prefix is not decoded from zero; frames between the keyframe and
+    // A are dropped below by the segmentStartUs skip. Single-clip attempts pass
+    // startMs 0 and skip this entirely, preserving the whole-file path.
+    if (segmentStartUs > 0) {
+        if (!resetDecoder(startMs, false, 0, true)) {
+            return PlaybackErrorCode::Decode;
+        }
+    }
 
     while (!isCancelled(attemptId)) {
         if (const auto request = takePendingSeek()) {
@@ -948,6 +992,11 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
             const DecodeFlow flow = receiveFrames();
             if (flow == DecodeFlow::Seek) {
                 continue;
+            }
+            if (flow == DecodeFlow::EndOfSegment) {
+                // Reached the exclusive end B: the segment presented [A, B).
+                // Return success so a timeline advances to the next segment.
+                return std::nullopt;
             }
             if (flow == DecodeFlow::Cancelled) {
                 return PlaybackErrorCode::Decode;
@@ -975,6 +1024,9 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
         const DecodeFlow drainFlow = receiveFrames();
         if (drainFlow == DecodeFlow::Seek) {
             continue;
+        }
+        if (drainFlow == DecodeFlow::EndOfSegment) {
+            return std::nullopt;
         }
         if (drainFlow == DecodeFlow::Cancelled) {
             return PlaybackErrorCode::Decode;
@@ -1014,7 +1066,10 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
                 return PlaybackErrorCode::Decode;
             }
             seekAtEof = pendingSeek_.has_value() || state_ == PlaybackState::Seeking;
-            shouldLoop = !seekAtEof && looping_;
+            // honorLooping is false for timeline segments so an individual
+            // segment never restarts on natural EOF; only the whole timeline
+            // loops back to segment 0, orchestrated by runTimeline.
+            shouldLoop = !seekAtEof && honorLooping && looping_;
             if (!seekAtEof && !shouldLoop) {
                 // Close the acceptance window before finishAttempt emits completion.
                 state_ = PlaybackState::Completed;
@@ -1042,19 +1097,81 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
 void VideoPlayback::runAttempt(uint64_t attemptId, std::string path) {
     std::optional<PlaybackErrorCode> error;
     try {
-        error = decodeAttempt(attemptId, path);
+        // Single-clip attempt: the whole file, no trim, natural speed, no
+        // per-attempt appearance override, and looping honored. These defaults
+        // reproduce the pre-timeline single-clip path byte-for-byte (AC-8).
+        error = decodeAttempt(attemptId, path, /*startMs=*/0, /*endMs=*/-1,
+                              /*speed=*/0.0, /*appearance=*/std::nullopt,
+                              /*honorLooping=*/true);
     } catch (...) {
         LOGE("Unhandled native failure while decoding playback attempt");
         error = PlaybackErrorCode::Decode;
     }
     if (!isCancelled(attemptId)) {
-        finishAttempt(attemptId, error);
+        finishAttempt(attemptId, PlaybackKind::Single, error, -1);
+    }
+}
+
+void VideoPlayback::runTimeline(uint64_t attemptId,
+                                std::vector<TimelineSegment> segments) {
+    // One worker sequences every segment back-to-back on the shared surface.
+    // Each segment is a bounded decodeAttempt with its own window, speed, and
+    // appearance and with segment-level looping disabled (honorLooping=false);
+    // only the whole timeline loops, restarting from segment 0 when looping_ is
+    // set. Exactly one terminal event is emitted for the whole timeline.
+    do {
+        for (size_t i = 0; i < segments.size(); ++i) {
+            if (isCancelled(attemptId)) {
+                return;
+            }
+            const TimelineSegment &segment = segments[i];
+            std::optional<PlaybackErrorCode> error;
+            try {
+                error = decodeAttempt(attemptId, segment.path, segment.startMs,
+                                      segment.endMs, segment.speed,
+                                      std::optional<AppearanceSnapshot>(segment.appearance),
+                                      /*honorLooping=*/false);
+            } catch (...) {
+                LOGE("Unhandled native failure while decoding timeline segment");
+                error = PlaybackErrorCode::Decode;
+            }
+            if (error.has_value()) {
+                // Fail-fast: end the whole timeline with the failing segment's
+                // index (D-6). Suppress if the attempt was already claimed
+                // (stop/release/surface-loss) to avoid a late callback.
+                if (!isCancelled(attemptId)) {
+                    finishAttempt(attemptId, PlaybackKind::Timeline, error,
+                                  static_cast<int>(i));
+                }
+                return;
+            }
+        }
+
+        // All segments completed. Restart from segment 0 when whole-timeline
+        // looping is enabled and the attempt is still current (D-9).
+        bool loopTimeline = false;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            loopTimeline = looping_ && !terminalClaimed_ &&
+                           currentAttemptId_ == attemptId &&
+                           !cancelRequested_.load(std::memory_order_acquire) &&
+                           surfaceReady_ && state_ != PlaybackState::Released;
+        }
+        if (!loopTimeline) {
+            break;
+        }
+    } while (!isCancelled(attemptId));
+
+    if (!isCancelled(attemptId)) {
+        finishAttempt(attemptId, PlaybackKind::Timeline, std::nullopt, -1);
     }
 }
 
 void VideoPlayback::finishAttempt(
         uint64_t attemptId,
-        std::optional<PlaybackErrorCode> error) {
+        PlaybackKind kind,
+        std::optional<PlaybackErrorCode> error,
+        int segmentIndex) {
     PlaybackTerminalCallback callback;
     const bool releaseFailedSurface = error == PlaybackErrorCode::Render;
     {
@@ -1078,6 +1195,6 @@ void VideoPlayback::finishAttempt(
         renderer_.releaseSurface();
     }
     if (callback) {
-        callback(attemptId, error);
+        callback(attemptId, kind, error, segmentIndex);
     }
 }

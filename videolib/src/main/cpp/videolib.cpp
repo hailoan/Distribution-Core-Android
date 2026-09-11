@@ -34,6 +34,10 @@ namespace {
                         targetClass, "onNativePlaybackCompleted", "(J)V");
                 errorMethod_ = env->GetMethodID(
                         targetClass, "onNativePlaybackError", "(JI)V");
+                timelineCompletedMethod_ = env->GetMethodID(
+                        targetClass, "onNativeTimelineCompleted", "(J)V");
+                timelineErrorMethod_ = env->GetMethodID(
+                        targetClass, "onNativeTimelineError", "(JII)V");
             }
             if (targetClass != nullptr) {
                 env->DeleteLocalRef(targetClass);
@@ -42,6 +46,8 @@ namespace {
                 env->ExceptionClear();
                 completedMethod_ = nullptr;
                 errorMethod_ = nullptr;
+                timelineCompletedMethod_ = nullptr;
+                timelineErrorMethod_ = nullptr;
             }
         }
 
@@ -60,10 +66,17 @@ namespace {
         }
 
         bool isValid() const {
-            return target_ != nullptr && completedMethod_ != nullptr && errorMethod_ != nullptr;
+            return target_ != nullptr && completedMethod_ != nullptr &&
+                   errorMethod_ != nullptr && timelineCompletedMethod_ != nullptr &&
+                   timelineErrorMethod_ != nullptr;
         }
 
-        void notify(uint64_t attemptId, std::optional<PlaybackErrorCode> error) const {
+        // Routes the single terminal event to the callback family that matches
+        // the attempt kind. Single-clip attempts use the pre-existing
+        // onNativePlayback* callbacks (segmentIndex is ignored); timeline
+        // attempts use onNativeTimeline*, carrying the failing segment index.
+        void notify(uint64_t attemptId, PlaybackKind kind,
+                    std::optional<PlaybackErrorCode> error, int segmentIndex) const {
             bool attached = false;
             JNIEnv *env = environment(&attached);
             if (env == nullptr || !isValid()) {
@@ -72,7 +85,16 @@ namespace {
                 }
                 return;
             }
-            if (error.has_value()) {
+            if (kind == PlaybackKind::Timeline) {
+                if (error.has_value()) {
+                    env->CallVoidMethod(
+                            target_, timelineErrorMethod_, static_cast<jlong>(attemptId),
+                            static_cast<jint>(*error), static_cast<jint>(segmentIndex));
+                } else {
+                    env->CallVoidMethod(
+                            target_, timelineCompletedMethod_, static_cast<jlong>(attemptId));
+                }
+            } else if (error.has_value()) {
                 env->CallVoidMethod(
                         target_, errorMethod_, static_cast<jlong>(attemptId),
                         static_cast<jint>(*error));
@@ -108,6 +130,8 @@ namespace {
         jobject target_ = nullptr;
         jmethodID completedMethod_ = nullptr;
         jmethodID errorMethod_ = nullptr;
+        jmethodID timelineCompletedMethod_ = nullptr;
+        jmethodID timelineErrorMethod_ = nullptr;
     };
 
     static inline VideoPlayback *asPlayback(jlong handle) {
@@ -249,6 +273,131 @@ namespace {
         return AppearanceApplyResult::success();
     }
 
+    // Marshals the parallel per-segment arrays into a TimelineSegment vector.
+    // Returns true on success; on any structural error clears any pending JNI
+    // exception and returns false so the caller rejects the whole request
+    // before starting an attempt (fail-fast, no partial timeline). Each
+    // segment's appearance is read through the same readAppearance path used by
+    // single-clip apply, so filter/adjustment validation stays identical.
+    bool readTimelineSegments(
+            JNIEnv *env,
+            jobjectArray paths,
+            jlongArray startsMs,
+            jlongArray endsMs,
+            jdoubleArray speeds,
+            jobjectArray adjustments,
+            jintArray filterVersions,
+            jobjectArray filterSources,
+            jfloatArray filterOpacities,
+            jobjectArray textureWidths,
+            jobjectArray textureHeights,
+            jobjectArray textureBytes,
+            std::vector<TimelineSegment> *segments) {
+        if (paths == nullptr || startsMs == nullptr || endsMs == nullptr ||
+            speeds == nullptr || adjustments == nullptr || filterVersions == nullptr ||
+            filterSources == nullptr || filterOpacities == nullptr ||
+            textureWidths == nullptr || textureHeights == nullptr ||
+            textureBytes == nullptr) {
+            return false;
+        }
+        const jsize count = env->GetArrayLength(paths);
+        if (count <= 0 ||
+            env->GetArrayLength(startsMs) != count ||
+            env->GetArrayLength(endsMs) != count ||
+            env->GetArrayLength(speeds) != count ||
+            env->GetArrayLength(adjustments) != count ||
+            env->GetArrayLength(filterVersions) != count ||
+            env->GetArrayLength(filterSources) != count ||
+            env->GetArrayLength(filterOpacities) != count ||
+            env->GetArrayLength(textureWidths) != count ||
+            env->GetArrayLength(textureHeights) != count ||
+            env->GetArrayLength(textureBytes) != count) {
+            return false;
+        }
+
+        std::vector<jlong> starts;
+        std::vector<jlong> ends;
+        std::vector<jdouble> segmentSpeeds;
+        std::vector<jint> versions;
+        std::vector<jfloat> opacities;
+        try {
+            starts.resize(static_cast<size_t>(count));
+            ends.resize(static_cast<size_t>(count));
+            segmentSpeeds.resize(static_cast<size_t>(count));
+            versions.resize(static_cast<size_t>(count));
+            opacities.resize(static_cast<size_t>(count));
+            segments->reserve(static_cast<size_t>(count));
+        } catch (...) {
+            return false;
+        }
+        env->GetLongArrayRegion(startsMs, 0, count, starts.data());
+        env->GetLongArrayRegion(endsMs, 0, count, ends.data());
+        env->GetDoubleArrayRegion(speeds, 0, count, segmentSpeeds.data());
+        env->GetIntArrayRegion(filterVersions, 0, count, versions.data());
+        env->GetFloatArrayRegion(filterOpacities, 0, count, opacities.data());
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return false;
+        }
+
+        for (jsize i = 0; i < count; ++i) {
+            auto pathString = static_cast<jstring>(env->GetObjectArrayElement(paths, i));
+            auto adjustmentValues =
+                    static_cast<jfloatArray>(env->GetObjectArrayElement(adjustments, i));
+            auto filterSource =
+                    static_cast<jstring>(env->GetObjectArrayElement(filterSources, i));
+            auto widths = static_cast<jintArray>(env->GetObjectArrayElement(textureWidths, i));
+            auto heights = static_cast<jintArray>(env->GetObjectArrayElement(textureHeights, i));
+            auto bytes = static_cast<jobjectArray>(env->GetObjectArrayElement(textureBytes, i));
+
+            bool ok = pathString != nullptr && adjustmentValues != nullptr;
+            TimelineSegment segment;
+            if (ok) {
+                const char *pathChars = env->GetStringUTFChars(pathString, nullptr);
+                if (pathChars == nullptr) {
+                    if (env->ExceptionCheck()) env->ExceptionClear();
+                    ok = false;
+                } else {
+                    try {
+                        segment.path.assign(pathChars);
+                    } catch (...) {
+                        ok = false;
+                    }
+                    env->ReleaseStringUTFChars(pathString, pathChars);
+                }
+            }
+            if (ok) {
+                AppearanceApplyResult conversion = readAppearance(
+                        env, adjustmentValues, versions[static_cast<size_t>(i)],
+                        filterSource, opacities[static_cast<size_t>(i)],
+                        widths, heights, bytes, &segment.appearance);
+                ok = conversion.accepted();
+            }
+            if (ok) {
+                segment.startMs = static_cast<int64_t>(starts[static_cast<size_t>(i)]);
+                segment.endMs = static_cast<int64_t>(ends[static_cast<size_t>(i)]);
+                segment.speed = static_cast<double>(segmentSpeeds[static_cast<size_t>(i)]);
+                try {
+                    segments->push_back(std::move(segment));
+                } catch (...) {
+                    ok = false;
+                }
+            }
+
+            if (pathString != nullptr) env->DeleteLocalRef(pathString);
+            if (adjustmentValues != nullptr) env->DeleteLocalRef(adjustmentValues);
+            if (filterSource != nullptr) env->DeleteLocalRef(filterSource);
+            if (widths != nullptr) env->DeleteLocalRef(widths);
+            if (heights != nullptr) env->DeleteLocalRef(heights);
+            if (bytes != nullptr) env->DeleteLocalRef(bytes);
+            if (!ok) {
+                if (env->ExceptionCheck()) env->ExceptionClear();
+                return false;
+            }
+        }
+        return true;
+    }
+
 } // namespace
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void * /* reserved */) {
@@ -294,8 +443,9 @@ Java_com_cii_videolib_VideoPreview_nativeCreate(JNIEnv *env, jobject thiz) {
             return 0;
         }
         auto *playback = new VideoPlayback(
-                [bridge](uint64_t attemptId, std::optional<PlaybackErrorCode> error) {
-                    bridge->notify(attemptId, error);
+                [bridge](uint64_t attemptId, PlaybackKind kind,
+                         std::optional<PlaybackErrorCode> error, int segmentIndex) {
+                    bridge->notify(attemptId, kind, error, segmentIndex);
                 });
         return reinterpret_cast<jlong>(playback);
     } catch (...) {
@@ -339,6 +489,42 @@ Java_com_cii_videolib_VideoPreview_nativePlay(
     }
     env->ReleaseStringUTFChars(path, pathChars);
     return static_cast<jlong>(playback->play(pathCopy));
+}
+
+// Ordered-timeline entry point. Segment i is described by the i-th element of
+// every parallel array; the per-segment appearance arrays mirror
+// nativeApplyAppearance's parameters. Returns a positive attempt id when the
+// timeline was accepted, otherwise 0. The Kotlin external fun signature must
+// stay in exact sync with this parameter list (hand-mangled JNI, no
+// RegisterNatives).
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_cii_videolib_VideoPreview_nativePlayTimeline(
+        JNIEnv *env,
+        jobject /* this */,
+        jlong handle,
+        jobjectArray paths,
+        jlongArray startsMs,
+        jlongArray endsMs,
+        jdoubleArray speeds,
+        jobjectArray adjustments,
+        jintArray filterVersions,
+        jobjectArray filterSources,
+        jfloatArray filterOpacities,
+        jobjectArray textureWidths,
+        jobjectArray textureHeights,
+        jobjectArray textureBytes) {
+    VideoPlayback *playback = asPlayback(handle);
+    if (playback == nullptr) {
+        return 0;
+    }
+    std::vector<TimelineSegment> segments;
+    if (!readTimelineSegments(
+            env, paths, startsMs, endsMs, speeds, adjustments, filterVersions,
+            filterSources, filterOpacities, textureWidths, textureHeights,
+            textureBytes, &segments)) {
+        return 0;
+    }
+    return static_cast<jlong>(playback->playTimeline(std::move(segments)));
 }
 
 extern "C" JNIEXPORT void JNICALL

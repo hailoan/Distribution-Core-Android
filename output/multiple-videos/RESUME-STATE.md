@@ -15,7 +15,7 @@ speed, played back-to-back on one preview surface. Branch: `feature/video`.
 | Feature Analysis | `DEV-SPEC.md` | done — `AUTOMATION: CONTINUE` |
 | Solution Design | `SOLUTION-DESIGN.md` | done — `AUTOMATION: CONTINUE` |
 | Implementation Plan | `IMPLEMENT-PLAN.md` | done — `AUTOMATION: CONTINUE` |
-| Android Dev | `CHANGESET.md` | **NOT written** — write at end of /implement, start with `AUTOMATION: CONTINUE` |
+| Android Dev | `CHANGESET.md` | **done** — `AUTOMATION: CONTINUE`; P1–P6 complete; testing + integration handed off |
 
 ## Core design (do not re-decide)
 
@@ -111,5 +111,14 @@ not per-task. Incremental work is captured automatically; no manual commit neede
 
 ## To resume
 
-Run `/implement multiple-videos`, finish **P1 remaining** items 1–6 above, then proceed through the
-DAG and write `CHANGESET.md`.
+**Android Dev stage is complete.** `CHANGESET.md` is written (`AUTOMATION: CONTINUE`) with all six
+android-dev tasks (P1–P6) done. Next stages, per the DAG:
+
+- **Testing** (`/ut`): author UT-SEG (`videolib/src/test/.../VideoSegmentTest.kt`, C11) and ANDT-TL-1..7
+  (`videolib/src/androidTest/.../TimelinePlaybackInstrumentedTest.kt`, C12). See CHANGESET §5.
+- **Integration** (`/it`): run IT-BUILD (`:videolib:assembleDebug` + both-ABI `.so`), IT-APP
+  (`:app:assembleDebug`), IT-DEVICE (device smoke on `arm64-v8a` + `armeabi-v7a`). See CHANGESET §6.
+  These require **separate build/device authorization** (nothing was compiled or run during Dev).
+
+All source edits captured by the session auto-commit hook. No manual commit performed (needs
+explicit authorization).

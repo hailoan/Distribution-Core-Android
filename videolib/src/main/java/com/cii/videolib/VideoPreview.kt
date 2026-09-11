@@ -36,6 +36,7 @@ class VideoPreview {
     private var startPending = false
     private var activeAttemptId = NO_ATTEMPT
     private var playbackListener: PlaybackListener? = null
+    private var timelineListener: TimelineListener? = null
     private var pendingNativeEvent: NativePlaybackEvent? = null
 
     /**
@@ -76,6 +77,82 @@ class VideoPreview {
             startPending = false
             if (attemptId == NO_ATTEMPT) {
                 playbackListener = null
+                pendingNativeEvent = null
+                return false
+            }
+            activeAttemptId = attemptId
+            pendingEvent = pendingNativeEvent?.takeIf { it.attemptId == attemptId }
+            pendingNativeEvent = null
+        }
+        pendingEvent?.let(::enqueueNativeEvent)
+        return true
+    }
+
+    /**
+     * Starts sequential playback of an ordered list of trimmed [segments].
+     *
+     * Each segment presents its own `[startMs, endMs)` interval with its own
+     * filter/appearance and speed, back-to-back on the attached surface, in list
+     * order. Returns `true` when the timeline was accepted. A valid surface must
+     * already be attached, the list must be non-empty, and only one attempt
+     * (single clip or timeline) may be active. Every segment must have a
+     * well-formed interval (`0 <= startMs < endMs`), a speed `>= 0.1`, and an
+     * appearance that passes the same validation as [setAppearance]; otherwise
+     * the whole request is rejected before any frame is presented. The exclusive
+     * end of each interval is additionally clamped to the real media duration by
+     * native playback.
+     *
+     * Accepted timelines report exactly one terminal outcome to [listener] on
+     * the main thread, unless cancelled with [stop] or [release].
+     */
+    fun playTimeline(segments: List<VideoSegment>, listener: TimelineListener): Boolean {
+        val handle = nativeHandle
+        if (handle == 0L || segments.isEmpty() || !surfaceAttached) return false
+        for (segment in segments) {
+            if (segment.path.isBlank() || !segment.hasValidInterval) return false
+            if (!segment.speed.isFinite() || segment.speed < MIN_PLAYBACK_SPEED) return false
+            if (validate(segment.appearance) != null) return false
+        }
+
+        synchronized(callbackLock) {
+            if (startPending || activeAttemptId != NO_ATTEMPT) return false
+            startPending = true
+            timelineListener = listener
+            pendingNativeEvent = null
+        }
+
+        val attemptId = nativePlayTimeline(
+            handle = handle,
+            paths = Array(segments.size) { segments[it].path },
+            startsMs = LongArray(segments.size) { segments[it].startMs },
+            endsMs = LongArray(segments.size) { segments[it].endMs },
+            speeds = DoubleArray(segments.size) { segments[it].speed },
+            adjustments = Array(segments.size) { segments[it].appearance.adjustments.toNativeArray() },
+            filterVersions = IntArray(segments.size) {
+                segments[it].appearance.filter?.version ?: NO_FILTER_VERSION
+            },
+            filterSources = Array(segments.size) { segments[it].appearance.filter?.source },
+            filterOpacities = FloatArray(segments.size) {
+                segments[it].appearance.filter?.opacity ?: 1f
+            },
+            textureWidths = Array(segments.size) {
+                segments[it].appearance.filter?.textures?.map { texture -> texture.width }
+                    ?.toIntArray() ?: IntArray(0)
+            },
+            textureHeights = Array(segments.size) {
+                segments[it].appearance.filter?.textures?.map { texture -> texture.height }
+                    ?.toIntArray() ?: IntArray(0)
+            },
+            textureBytes = Array(segments.size) {
+                segments[it].appearance.filter?.textures?.map { texture -> texture.copyRgba8888() }
+                    ?.toTypedArray() ?: emptyArray()
+            },
+        )
+        val pendingEvent: NativePlaybackEvent?
+        synchronized(callbackLock) {
+            startPending = false
+            if (attemptId == NO_ATTEMPT) {
+                timelineListener = null
                 pendingNativeEvent = null
                 return false
             }
@@ -258,6 +335,32 @@ class VideoPreview {
         )
     }
 
+    @Keep
+    @Suppress("unused") // Called from JNI on the native timeline worker.
+    private fun onNativeTimelineCompleted(attemptId: Long) {
+        receiveNativeEvent(NativePlaybackEvent.TimelineCompleted(attemptId))
+    }
+
+    @Keep
+    @Suppress("unused") // Called from JNI on the native timeline worker.
+    private fun onNativeTimelineError(attemptId: Long, errorCode: Int, segmentIndex: Int) {
+        if (errorCode == NATIVE_ERROR_RENDER) {
+            surfaceAttached = false
+        }
+        receiveNativeEvent(
+            NativePlaybackEvent.TimelineError(
+                attemptId = attemptId,
+                error = when (errorCode) {
+                    NATIVE_ERROR_INPUT_OPEN -> PlaybackError.INPUT_OPEN
+                    NATIVE_ERROR_UNSUPPORTED_VIDEO -> PlaybackError.UNSUPPORTED_VIDEO
+                    NATIVE_ERROR_RENDER -> PlaybackError.RENDER
+                    else -> PlaybackError.DECODE
+                },
+                segmentIndex = segmentIndex,
+            ),
+        )
+    }
+
     private fun receiveNativeEvent(event: NativePlaybackEvent) {
         synchronized(callbackLock) {
             if (startPending) {
@@ -270,16 +373,23 @@ class VideoPreview {
 
     private fun enqueueNativeEvent(event: NativePlaybackEvent) {
         callbackHandler.post {
-            val listener = synchronized(callbackLock) {
+            val listeners = synchronized(callbackLock) {
                 if (activeAttemptId != event.attemptId) return@post
                 activeAttemptId = NO_ATTEMPT
                 pendingNativeEvent = null
-                playbackListener.also { playbackListener = null }
-            } ?: return@post
+                val captured = playbackListener to timelineListener
+                playbackListener = null
+                timelineListener = null
+                captured
+            }
+            val (playback, timeline) = listeners
 
             when (event) {
-                is NativePlaybackEvent.Completed -> listener.onPlaybackCompleted()
-                is NativePlaybackEvent.Error -> listener.onPlaybackError(event.error)
+                is NativePlaybackEvent.Completed -> playback?.onPlaybackCompleted()
+                is NativePlaybackEvent.Error -> playback?.onPlaybackError(event.error)
+                is NativePlaybackEvent.TimelineCompleted -> timeline?.onTimelineCompleted()
+                is NativePlaybackEvent.TimelineError ->
+                    timeline?.onTimelineError(event.error, event.segmentIndex)
             }
         }
     }
@@ -289,6 +399,7 @@ class VideoPreview {
             startPending = false
             activeAttemptId = NO_ATTEMPT
             playbackListener = null
+            timelineListener = null
             pendingNativeEvent = null
         }
     }
@@ -374,6 +485,20 @@ class VideoPreview {
     private external fun nativeCreate(): Long
     private external fun nativeSurfaceAvailable(handle: Long, surface: Surface): Boolean
     private external fun nativePlay(handle: Long, path: String): Long
+    private external fun nativePlayTimeline(
+        handle: Long,
+        paths: Array<String>,
+        startsMs: LongArray,
+        endsMs: LongArray,
+        speeds: DoubleArray,
+        adjustments: Array<FloatArray>,
+        filterVersions: IntArray,
+        filterSources: Array<String?>,
+        filterOpacities: FloatArray,
+        textureWidths: Array<IntArray>,
+        textureHeights: Array<IntArray>,
+        textureBytes: Array<Array<ByteArray>>,
+    ): Long
     private external fun nativeStop(handle: Long)
     private external fun nativePause(handle: Long): Boolean
     private external fun nativeResume(handle: Long): Boolean
@@ -428,6 +553,14 @@ class VideoPreview {
         data class Error(
             override val attemptId: Long,
             val error: PlaybackError,
+        ) : NativePlaybackEvent
+
+        data class TimelineCompleted(override val attemptId: Long) : NativePlaybackEvent
+
+        data class TimelineError(
+            override val attemptId: Long,
+            val error: PlaybackError,
+            val segmentIndex: Int,
         ) : NativePlaybackEvent
     }
 }
