@@ -34,7 +34,16 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         # OpenGL ES preview pipeline (EGL renderer + GLES draw path). Header-only
         # render_thread_executor.h / gl_program.h are pulled in via includes.
         preview_renderer.cpp
-        gl_program.cpp)
+        gl_program.cpp
+        # Export pipeline (VideoExporter): decode → offscreen effect → MediaCodec
+        # H.264 → FFmpeg MP4 mux, plus audio transcode. Header-only
+        # offscreen_renderer.h / frame_source.h etc. are pulled in via includes.
+        frame_source.cpp
+        offscreen_renderer.cpp
+        h264_encoder.cpp
+        mp4_muxer.cpp
+        audio_transcoder.cpp
+        video_export.cpp)
 
 # 16 KB max-page-size on every ABI. arm64-v8a additionally requires -Bsymbolic
 # to resolve FFmpeg's aarch64 TX-table PC-relative relocations
@@ -65,4 +74,8 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
         log
         # OpenGL ES preview: EGL context + GLES 3.0 rendering onto the Surface.
         EGL
-        GLESv3)
+        GLESv3
+        # Export: H.264 encode via Android MediaCodec (the LGPL FFmpeg build has
+        # no usable software H.264 encoder). mediandk provides AMediaCodec; the
+        # MP4 muxing is done by FFmpeg's mov/mp4 muxer, so no AMediaMuxer is used.
+        mediandk)

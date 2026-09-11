@@ -8,6 +8,7 @@
 #include <android/native_window_jni.h>
 
 #include "video_playback.h"
+#include "video_export.h"
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -642,4 +643,315 @@ Java_com_cii_videolib_VideoPreview_nativeDestroy(
         JNIEnv *env, jobject /* this */, jlong handle) {
     VideoPlayback *playback = asPlayback(handle);
     delete playback; // destructor stops decode, then releases EGL and callbacks
+}
+
+// --- Export (VideoExporter) --------------------------------------------------
+// Each export maps 1:1 to a com.cii.videolib.VideoExporter `external fun`; the
+// hand-mangled name must stay in exact sync with the Kotlin class/method names.
+// nativeHandle is an opaque pointer to a heap VideoExport owned by the Kotlin
+// VideoExporter instance.
+
+namespace {
+
+    class ExportJniBridge {
+    public:
+        ExportJniBridge(JNIEnv *env, jobject target) : vm_(gJvm) {
+            if (env == nullptr || target == nullptr || vm_ == nullptr) {
+                return;
+            }
+            target_ = env->NewGlobalRef(target);
+            jclass targetClass = env->GetObjectClass(target);
+            if (target_ != nullptr && targetClass != nullptr) {
+                completedMethod_ = env->GetMethodID(
+                        targetClass, "onNativeExportCompleted", "(J)V");
+                errorMethod_ = env->GetMethodID(
+                        targetClass, "onNativeExportError", "(JII)V");
+            }
+            if (targetClass != nullptr) {
+                env->DeleteLocalRef(targetClass);
+            }
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                completedMethod_ = nullptr;
+                errorMethod_ = nullptr;
+            }
+        }
+
+        ~ExportJniBridge() {
+            if (target_ == nullptr || vm_ == nullptr) {
+                return;
+            }
+            bool attached = false;
+            JNIEnv *env = environment(&attached);
+            if (env != nullptr) {
+                env->DeleteGlobalRef(target_);
+            }
+            if (attached) {
+                vm_->DetachCurrentThread();
+            }
+        }
+
+        bool isValid() const {
+            return target_ != nullptr && completedMethod_ != nullptr &&
+                   errorMethod_ != nullptr;
+        }
+
+        void notify(uint64_t attemptId, std::optional<ExportErrorCode> error,
+                    int segmentIndex) const {
+            bool attached = false;
+            JNIEnv *env = environment(&attached);
+            if (env == nullptr || !isValid()) {
+                if (attached) vm_->DetachCurrentThread();
+                return;
+            }
+            if (error.has_value()) {
+                env->CallVoidMethod(target_, errorMethod_, static_cast<jlong>(attemptId),
+                                    static_cast<jint>(*error), static_cast<jint>(segmentIndex));
+            } else {
+                env->CallVoidMethod(target_, completedMethod_, static_cast<jlong>(attemptId));
+            }
+            if (env->ExceptionCheck()) {
+                LOGE("VideoExporter native callback raised an exception");
+                env->ExceptionClear();
+            }
+            if (attached) {
+                vm_->DetachCurrentThread();
+            }
+        }
+
+    private:
+        JNIEnv *environment(bool *attached) const {
+            *attached = false;
+            JNIEnv *env = nullptr;
+            const jint status = vm_->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
+            if (status == JNI_OK) {
+                return env;
+            }
+            if (status != JNI_EDETACHED ||
+                vm_->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+                return nullptr;
+            }
+            *attached = true;
+            return env;
+        }
+
+        JavaVM *vm_ = nullptr;
+        jobject target_ = nullptr;
+        jmethodID completedMethod_ = nullptr;
+        jmethodID errorMethod_ = nullptr;
+    };
+
+    static inline VideoExport *asExport(jlong handle) {
+        return reinterpret_cast<VideoExport *>(handle);
+    }
+
+    // Marshal the parallel per-segment arrays (mirroring nativePlayTimeline) into
+    // an ExportRequest. Each segment's appearance is read through the same
+    // readAppearance path used by preview, so validation stays identical.
+    // Returns true on success; on any structural error clears pending JNI
+    // exceptions and returns false so the caller rejects the whole request.
+    bool readExportRequest(
+            JNIEnv *env,
+            jstring outputPath,
+            jboolean includeAudio,
+            jobjectArray paths,
+            jlongArray startsMs,
+            jlongArray endsMs,
+            jdoubleArray speeds,
+            jobjectArray adjustments,
+            jintArray filterVersions,
+            jobjectArray filterSources,
+            jfloatArray filterOpacities,
+            jobjectArray textureWidths,
+            jobjectArray textureHeights,
+            jobjectArray textureBytes,
+            ExportRequest *request) {
+        if (outputPath == nullptr || paths == nullptr || startsMs == nullptr ||
+            endsMs == nullptr || speeds == nullptr || adjustments == nullptr ||
+            filterVersions == nullptr || filterSources == nullptr ||
+            filterOpacities == nullptr || textureWidths == nullptr ||
+            textureHeights == nullptr || textureBytes == nullptr) {
+            return false;
+        }
+        const char *outChars = env->GetStringUTFChars(outputPath, nullptr);
+        if (outChars == nullptr) {
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            return false;
+        }
+        try {
+            request->outputPath.assign(outChars);
+        } catch (...) {
+            env->ReleaseStringUTFChars(outputPath, outChars);
+            return false;
+        }
+        env->ReleaseStringUTFChars(outputPath, outChars);
+        request->includeAudio = includeAudio == JNI_TRUE;
+
+        const jsize count = env->GetArrayLength(paths);
+        if (count <= 0 ||
+            env->GetArrayLength(startsMs) != count ||
+            env->GetArrayLength(endsMs) != count ||
+            env->GetArrayLength(speeds) != count ||
+            env->GetArrayLength(adjustments) != count ||
+            env->GetArrayLength(filterVersions) != count ||
+            env->GetArrayLength(filterSources) != count ||
+            env->GetArrayLength(filterOpacities) != count ||
+            env->GetArrayLength(textureWidths) != count ||
+            env->GetArrayLength(textureHeights) != count ||
+            env->GetArrayLength(textureBytes) != count) {
+            return false;
+        }
+
+        std::vector<jlong> starts;
+        std::vector<jlong> ends;
+        std::vector<jdouble> segmentSpeeds;
+        std::vector<jint> versions;
+        std::vector<jfloat> opacities;
+        try {
+            starts.resize(static_cast<size_t>(count));
+            ends.resize(static_cast<size_t>(count));
+            segmentSpeeds.resize(static_cast<size_t>(count));
+            versions.resize(static_cast<size_t>(count));
+            opacities.resize(static_cast<size_t>(count));
+            request->segments.reserve(static_cast<size_t>(count));
+        } catch (...) {
+            return false;
+        }
+        env->GetLongArrayRegion(startsMs, 0, count, starts.data());
+        env->GetLongArrayRegion(endsMs, 0, count, ends.data());
+        env->GetDoubleArrayRegion(speeds, 0, count, segmentSpeeds.data());
+        env->GetIntArrayRegion(filterVersions, 0, count, versions.data());
+        env->GetFloatArrayRegion(filterOpacities, 0, count, opacities.data());
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return false;
+        }
+
+        for (jsize i = 0; i < count; ++i) {
+            auto pathString = static_cast<jstring>(env->GetObjectArrayElement(paths, i));
+            auto adjustmentValues =
+                    static_cast<jfloatArray>(env->GetObjectArrayElement(adjustments, i));
+            auto filterSource =
+                    static_cast<jstring>(env->GetObjectArrayElement(filterSources, i));
+            auto widths = static_cast<jintArray>(env->GetObjectArrayElement(textureWidths, i));
+            auto heights = static_cast<jintArray>(env->GetObjectArrayElement(textureHeights, i));
+            auto bytes = static_cast<jobjectArray>(env->GetObjectArrayElement(textureBytes, i));
+
+            bool ok = pathString != nullptr && adjustmentValues != nullptr;
+            ExportSegment segment;
+            if (ok) {
+                const char *pathChars = env->GetStringUTFChars(pathString, nullptr);
+                if (pathChars == nullptr) {
+                    if (env->ExceptionCheck()) env->ExceptionClear();
+                    ok = false;
+                } else {
+                    try {
+                        segment.path.assign(pathChars);
+                    } catch (...) {
+                        ok = false;
+                    }
+                    env->ReleaseStringUTFChars(pathString, pathChars);
+                }
+            }
+            if (ok) {
+                AppearanceApplyResult conversion = readAppearance(
+                        env, adjustmentValues, versions[static_cast<size_t>(i)],
+                        filterSource, opacities[static_cast<size_t>(i)],
+                        widths, heights, bytes, &segment.appearance);
+                ok = conversion.accepted();
+            }
+            if (ok) {
+                segment.startMs = static_cast<int64_t>(starts[static_cast<size_t>(i)]);
+                segment.endMs = static_cast<int64_t>(ends[static_cast<size_t>(i)]);
+                segment.speed = static_cast<double>(segmentSpeeds[static_cast<size_t>(i)]);
+                try {
+                    request->segments.push_back(std::move(segment));
+                } catch (...) {
+                    ok = false;
+                }
+            }
+
+            if (pathString != nullptr) env->DeleteLocalRef(pathString);
+            if (adjustmentValues != nullptr) env->DeleteLocalRef(adjustmentValues);
+            if (filterSource != nullptr) env->DeleteLocalRef(filterSource);
+            if (widths != nullptr) env->DeleteLocalRef(widths);
+            if (heights != nullptr) env->DeleteLocalRef(heights);
+            if (bytes != nullptr) env->DeleteLocalRef(bytes);
+            if (!ok) {
+                if (env->ExceptionCheck()) env->ExceptionClear();
+                return false;
+            }
+        }
+        return true;
+    }
+
+} // namespace
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_cii_videolib_VideoExporter_nativeCreate(JNIEnv *env, jobject thiz) {
+    try {
+        auto bridge = std::make_shared<ExportJniBridge>(env, thiz);
+        if (!bridge->isValid()) {
+            return 0;
+        }
+        auto *exporter = new VideoExport(
+                [bridge](uint64_t attemptId, std::optional<ExportErrorCode> error,
+                         int segmentIndex) {
+                    bridge->notify(attemptId, error, segmentIndex);
+                });
+        return reinterpret_cast<jlong>(exporter);
+    } catch (...) {
+        return 0;
+    }
+}
+
+// Timeline-shaped export entry (a single-clip export is a one-element timeline).
+// The Kotlin external fun signature must stay in exact sync with this parameter
+// list (hand-mangled JNI, no RegisterNatives).
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_cii_videolib_VideoExporter_nativeStartExport(
+        JNIEnv *env,
+        jobject /* this */,
+        jlong handle,
+        jstring outputPath,
+        jboolean includeAudio,
+        jobjectArray paths,
+        jlongArray startsMs,
+        jlongArray endsMs,
+        jdoubleArray speeds,
+        jobjectArray adjustments,
+        jintArray filterVersions,
+        jobjectArray filterSources,
+        jfloatArray filterOpacities,
+        jobjectArray textureWidths,
+        jobjectArray textureHeights,
+        jobjectArray textureBytes) {
+    VideoExport *exporter = asExport(handle);
+    if (exporter == nullptr) {
+        return 0;
+    }
+    ExportRequest request;
+    if (!readExportRequest(env, outputPath, includeAudio, paths, startsMs, endsMs,
+                           speeds, adjustments, filterVersions, filterSources,
+                           filterOpacities, textureWidths, textureHeights,
+                           textureBytes, &request)) {
+        return 0;
+    }
+    return static_cast<jlong>(exporter->start(std::move(request)));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_cii_videolib_VideoExporter_nativeCancelExport(
+        JNIEnv *env, jobject /* this */, jlong handle) {
+    VideoExport *exporter = asExport(handle);
+    if (exporter != nullptr) {
+        exporter->cancel();
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_cii_videolib_VideoExporter_nativeDestroy(
+        JNIEnv *env, jobject /* this */, jlong handle) {
+    VideoExport *exporter = asExport(handle);
+    delete exporter; // destructor cancels the attempt and releases resources
 }

@@ -115,6 +115,89 @@ object TestVideoFixture {
     }
 
     /**
+     * Generates a deterministic clip that carries BOTH a video and an audio
+     * track, for export coverage that must observe an audio track in the output
+     * (T-AUDIO). The video track is the same ramping-red clip as
+     * [generateProgressiveVideo]; the audio track is silence encoded to AAC.
+     *
+     * Implemented by first producing the video-only clip and the audio-only clip
+     * with the existing generators, then remuxing both elementary streams into
+     * one MP4 with [MediaMuxer] + [android.media.MediaExtractor], so no new
+     * encode path is introduced here.
+     */
+    fun generateProgressiveVideoWithAudio(context: Context): File {
+        val videoOnly = generateProgressiveVideo(context)
+        val audioOnly = generateAudioOnly(context)
+        val output = File(cacheRoot(context), "progressive_with_audio.mp4")
+        if (output.exists()) output.delete()
+
+        val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        try {
+            val videoTrack = copyTrackInto(muxer, videoOnly, "video/")
+            val audioTrack = copyTrackInto(muxer, audioOnly, "audio/")
+            muxer.start()
+            writeTrack(muxer, videoOnly, "video/", videoTrack)
+            writeTrack(muxer, audioOnly, "audio/", audioTrack)
+            muxer.stop()
+        } finally {
+            muxer.release()
+        }
+        return output
+    }
+
+    // Adds the first track whose MIME starts with [mimePrefix] from [source] to
+    // [muxer] and returns the new track index (muxer not yet started).
+    private fun copyTrackInto(muxer: MediaMuxer, source: File, mimePrefix: String): Int {
+        val extractor = android.media.MediaExtractor()
+        try {
+            extractor.setDataSource(source.absolutePath)
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith(mimePrefix)) {
+                    return muxer.addTrack(format)
+                }
+            }
+        } finally {
+            extractor.release()
+        }
+        error("no $mimePrefix track in ${source.name}")
+    }
+
+    // Copies all samples of the first [mimePrefix] track from [source] into the
+    // already-started [muxer] under [trackIndex].
+    private fun writeTrack(muxer: MediaMuxer, source: File, mimePrefix: String, trackIndex: Int) {
+        val extractor = android.media.MediaExtractor()
+        try {
+            extractor.setDataSource(source.absolutePath)
+            var selected = -1
+            for (i in 0 until extractor.trackCount) {
+                val mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith(mimePrefix)) {
+                    selected = i
+                    break
+                }
+            }
+            check(selected >= 0) { "no $mimePrefix track in ${source.name}" }
+            extractor.selectTrack(selected)
+            val buffer = ByteBuffer.allocate(256 * 1024)
+            val info = MediaCodec.BufferInfo()
+            while (true) {
+                val size = extractor.readSampleData(buffer, 0)
+                if (size < 0) break
+                info.offset = 0
+                info.size = size
+                info.presentationTimeUs = extractor.sampleTime
+                info.flags = extractor.sampleFlags
+                muxer.writeSampleData(trackIndex, buffer, info)
+                extractor.advance()
+            }
+        } finally {
+            extractor.release()
+        }
+    }
+
+    /**
      * Generates a readable audio-only M4A (no video stream). Opening it succeeds
      * and stream info is found, but there is no video stream, so the native path
      * reports [PlaybackError.UNSUPPORTED_VIDEO].
