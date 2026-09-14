@@ -5,10 +5,40 @@
 #include "preview_renderer.h"
 
 #include <android/log.h>
+#include <algorithm>
+#include <cmath>
 
 #define LOG_TAG "videolib.egl"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+namespace {
+struct Viewport {
+    GLint x;
+    GLint y;
+    GLsizei width;
+    GLsizei height;
+};
+
+Viewport aspectFitViewport(int frameWidth, int frameHeight,
+                           EGLint surfaceWidth, EGLint surfaceHeight) {
+    const double scale = std::min(
+            static_cast<double>(surfaceWidth) / frameWidth,
+            static_cast<double>(surfaceHeight) / frameHeight);
+    const GLsizei fittedWidth = std::clamp(
+            static_cast<GLsizei>(std::lround(frameWidth * scale)),
+            1, static_cast<GLsizei>(surfaceWidth));
+    const GLsizei fittedHeight = std::clamp(
+            static_cast<GLsizei>(std::lround(frameHeight * scale)),
+            1, static_cast<GLsizei>(surfaceHeight));
+    return {
+            (surfaceWidth - fittedWidth) / 2,
+            (surfaceHeight - fittedHeight) / 2,
+            fittedWidth,
+            fittedHeight,
+    };
+}
+} // namespace
 
 PreviewRenderer::~PreviewRenderer() {
     // Ensure EGL is torn down and the window released before the executor
@@ -140,9 +170,13 @@ bool PreviewRenderer::pushFrame(const uint8_t *pixels, int width, int height) {
         while (glGetError() != GL_NO_ERROR) {
             // Clear any prior GL error so this presentation owns its result.
         }
+        // Clear the whole surface first, then fit the source frame inside it without
+        // changing the frame aspect ratio. Any letterbox/pillarbox area stays black.
         glViewport(0, 0, width_, height_);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
+        const Viewport viewport = aspectFitViewport(width, height, width_, height_);
+        glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
         glProgram_.drawFrame(pixels, width, height);
         const GLenum glError = glGetError();
         if (glError != GL_NO_ERROR) {
