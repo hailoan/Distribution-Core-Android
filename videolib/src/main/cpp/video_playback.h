@@ -79,6 +79,12 @@ public:
 
     AppearanceApplyResult applyAppearance(const AppearanceSnapshot &appearance);
 
+    // Redraws the retained frame through the current appearance. Opt-in and
+    // presentation-only: it does not decode, seek, move the playhead, or alter
+    // playback state, so an appearance accepted while paused becomes visible.
+    // Returns false when released, surfaceless, or no frame has been presented.
+    bool representFrame();
+
     void requestPattern();
 
     void releaseSurface();

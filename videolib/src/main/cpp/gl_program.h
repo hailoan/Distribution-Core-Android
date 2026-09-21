@@ -23,6 +23,15 @@ public:
 
     bool isReady() const { return generation_.program != 0; }
 
+    // True once a frame has been uploaded into the base texture, so drawFrame
+    // can redraw it without new pixel data.
+    bool hasRetainedFrame() const { return texWidth_ > 0 && texHeight_ > 0; }
+
+    // Extent of the retained base frame. Zero until the first upload.
+    int retainedFrameWidth() const { return texWidth_; }
+
+    int retainedFrameHeight() const { return texHeight_; }
+
 private:
     struct UniformLocations {
         GLint texture = -1, filterOpacity = -1, texelSize = -1;

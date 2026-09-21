@@ -193,6 +193,54 @@ bool PreviewRenderer::pushFrame(const uint8_t *pixels, int width, int height) {
     return presented;
 }
 
+bool PreviewRenderer::representFrame() {
+    if (state_ != State::Ready && state_ != State::Rendering) {
+        return false;
+    }
+    bool presented = false;
+    executor_.runSync([this, &presented] {
+        if (!glProgram_.hasRetainedFrame()) {
+            return; // nothing has been uploaded yet: nothing to redraw
+        }
+        const int width = glProgram_.retainedFrameWidth();
+        const int height = glProgram_.retainedFrameHeight();
+        if (eglMakeCurrent(display_, surface_, surface_, context_) != EGL_TRUE) {
+            LOGE("representFrame eglMakeCurrent failed: 0x%04x", eglGetError());
+            return;
+        }
+        while (glGetError() != GL_NO_ERROR) {
+            // Clear any prior GL error so this presentation owns its result.
+        }
+        // Same presentation geometry as pushFrame, so a redraw is pixel-identical
+        // to the frame it replaces apart from the active appearance generation.
+        glViewport(0, 0, width_, height_);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        const Viewport viewport = aspectFitViewport(width, height, width_, height_);
+        glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
+        // No pixel argument: redraw the retained base texture through the current
+        // generation, so an appearance accepted while paused becomes visible.
+        glProgram_.drawFrame(nullptr, width, height);
+        const GLenum glError = glGetError();
+        if (glError != GL_NO_ERROR) {
+            LOGE("representFrame GL failed: 0x%04x", glError);
+            return;
+        }
+        if (eglSwapBuffers(display_, surface_) != EGL_TRUE) {
+            LOGE("representFrame eglSwapBuffers failed: 0x%04x", eglGetError());
+            return;
+        }
+        presented = true;
+    });
+    // Unlike pushFrame, a failed redraw does not degrade the renderer to Failed:
+    // it presents nothing new, and escalating a cosmetic redraw failure would
+    // block subsequent pushFrame presentation.
+    if (presented) {
+        state_ = State::Rendering;
+    }
+    return presented;
+}
+
 void PreviewRenderer::requestPattern() {
     if (state_ != State::Ready && state_ != State::Rendering) {
         return;

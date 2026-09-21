@@ -629,6 +629,13 @@ Java_com_cii_videolib_VideoPreview_nativeRequestPattern(
     }
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_cii_videolib_VideoPreview_nativeRepresent(
+        JNIEnv *env, jobject /* this */, jlong handle) {
+    VideoPlayback *playback = asPlayback(handle);
+    return playback != nullptr && playback->representFrame() ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_cii_videolib_VideoPreview_nativeReleaseSurface(
         JNIEnv *env, jobject /* this */, jlong handle) {

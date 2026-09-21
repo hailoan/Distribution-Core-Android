@@ -289,6 +289,26 @@ class VideoPreview {
         nativeRequestPattern(handle)
     }
 
+    /**
+     * Redraws the currently displayed frame through the current [appearance],
+     * without decoding or uploading a new frame.
+     *
+     * Opt-in and presentation-only: it does not advance the playback position,
+     * seek, or change playback state. Use it after [setAppearance] (or
+     * [setFilter] / [setAdjustments]) has been accepted while nothing is being
+     * presented — for example while paused — so the new look becomes visible
+     * immediately instead of at the next presented frame.
+     *
+     * Returns `true` when a frame was re-presented; `false` when the preview is
+     * released, no surface is attached, or no frame has been presented yet.
+     * Safe to call redundantly.
+     */
+    fun representFrame(): Boolean {
+        val handle = nativeHandle
+        if (handle == 0L || !surfaceAttached) return false
+        return nativeRepresent(handle)
+    }
+
     /** Tears down the EGL context and releases the surface. Idempotent. */
     fun detachSurface() {
         val handle = nativeHandle
@@ -516,6 +536,7 @@ class VideoPreview {
         textureBytes: Array<ByteArray>,
     ): NativeAppearanceResult
     private external fun nativePushFrame(handle: Long, frame: ByteBuffer, width: Int, height: Int)
+    private external fun nativeRepresent(handle: Long): Boolean
     private external fun nativeRequestPattern(handle: Long)
     private external fun nativeReleaseSurface(handle: Long)
     private external fun nativeDestroy(handle: Long)

@@ -52,6 +52,12 @@ public:
     // thread); the caller owns the buffer.
     bool pushFrame(const uint8_t *pixels, int width, int height);
 
+    // Redraws the retained base frame through the current appearance generation,
+    // without uploading new pixels. Lets an appearance accepted while no frame is
+    // scheduled become visible. Returns false (no-op) unless Ready/Rendering and a
+    // frame has already been uploaded. Presentation-only: never mutates appearance.
+    bool representFrame();
+
     // Draws the built-in test pattern. Ignored unless Ready/Rendering.
     void requestPattern();
 

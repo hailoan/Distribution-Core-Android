@@ -232,6 +232,21 @@ void VideoPlayback::requestPattern() {
     renderer_.requestPattern();
 }
 
+bool VideoPlayback::representFrame() {
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        if (state_ == PlaybackState::Released || !surfaceReady_) {
+            return false;
+        }
+    }
+    // Presentation only. Deliberately does not touch controlVersion_, waitCv_,
+    // pendingSeek_, state_, or appearance_: a redraw must never wake the decode
+    // loop, move the playhead, or change playback state. rendererMutex_ alone
+    // serializes it against a concurrently presenting frame.
+    std::lock_guard<std::mutex> renderLock(rendererMutex_);
+    return renderer_.representFrame();
+}
+
 void VideoPlayback::joinFinishedWorker() {
     std::thread finished;
     {
