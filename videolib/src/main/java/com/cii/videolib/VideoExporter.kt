@@ -133,6 +133,16 @@ class VideoExporter {
                 segments[it].appearance.filter?.textures?.map { texture -> texture.copyRgba8888() }
                     ?.toTypedArray() ?: emptyArray()
             },
+            effectVersions = IntArray(segments.size) {
+                segments[it].appearance.effect?.version ?: NO_EFFECT_VERSION
+            },
+            effectSources = Array(segments.size) { segments[it].appearance.effect?.source },
+            effectOpacities = FloatArray(segments.size) {
+                segments[it].appearance.effect?.opacity ?: 1f
+            },
+            effectSpeeds = FloatArray(segments.size) {
+                segments[it].appearance.effect?.speed ?: 1f
+            },
         )
         val pendingEvent: NativeExportEvent?
         synchronized(callbackLock) {
@@ -265,6 +275,17 @@ class VideoExporter {
         if (valueError) return false
         if (a.levels.minimumInput >= a.levels.maximumInput) return false
 
+        candidate.effect?.let { effect ->
+            if (effect.version != VideoEffect.VERSION_1) return false
+            if (!effect.opacity.isFinite() || effect.opacity !in 0f..1f) return false
+            if (!effect.speed.isFinite() || effect.speed < 0f) return false
+            if (!EFFECT_ENTRY_POINT.containsMatchIn(effect.source) ||
+                RESERVED_FILTER_SOURCE.any { reserved -> effect.source.contains(reserved) }
+            ) {
+                return false
+            }
+        }
+
         val filter = candidate.filter ?: return true
         if (filter.version != VideoFilter.VERSION_1) return false
         if (!filter.opacity.isFinite() || filter.opacity !in 0f..1f) return false
@@ -315,6 +336,10 @@ class VideoExporter {
         textureWidths: Array<IntArray>,
         textureHeights: Array<IntArray>,
         textureBytes: Array<Array<ByteArray>>,
+        effectVersions: IntArray,
+        effectSources: Array<String?>,
+        effectOpacities: FloatArray,
+        effectSpeeds: FloatArray,
     ): Long
     private external fun nativeCancelExport(handle: Long)
     private external fun nativeDestroy(handle: Long)
@@ -323,6 +348,7 @@ class VideoExporter {
         private const val MIN_PLAYBACK_SPEED = 0.1
         private const val NO_ATTEMPT = 0L
         private const val NO_FILTER_VERSION = 0
+        private const val NO_EFFECT_VERSION = 0
         private const val RGBA_CHANNELS = 4L
         private const val NATIVE_ERROR_INPUT_OPEN = 1
         private const val NATIVE_ERROR_UNSUPPORTED_VIDEO = 2
@@ -332,6 +358,9 @@ class VideoExporter {
         private const val NATIVE_ERROR_OUTPUT = 7
         private val FILTER_ENTRY_POINT = Regex(
             """\bvec4\s+addFilter\s*\(\s*vec4\s+\w+\s*,\s*vec2\s+\w+\s*\)""",
+        )
+        private val EFFECT_ENTRY_POINT = Regex(
+            """\bvec4\s+addEffect\s*\(\s*vec2\s+\w+\s*\)""",
         )
         private val RESERVED_FILTER_SOURCE = listOf(
             "#version",

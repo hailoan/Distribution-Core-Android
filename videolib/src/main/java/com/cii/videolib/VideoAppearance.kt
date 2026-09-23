@@ -1,9 +1,15 @@
 package com.cii.videolib
 
-/** Complete, immutable appearance state retained by a [VideoPreview]. */
+/**
+ * Complete, immutable appearance state retained by a [VideoPreview].
+ *
+ * Passes run in a fixed order: [effect] (coordinate-sampling, may displace),
+ * then [filter] (colour transform), then [adjustments] (scalar corrections).
+ */
 data class VideoAppearance(
     val adjustments: VideoAdjustments = VideoAdjustments(),
     val filter: VideoFilter? = null,
+    val effect: VideoEffect? = null,
 )
 
 /** Input range and gamma used by the levels adjustment. */

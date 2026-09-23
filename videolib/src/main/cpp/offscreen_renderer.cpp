@@ -93,12 +93,13 @@ bool OffscreenRenderer::applyAppearance(const AppearanceSnapshot &appearance) {
 }
 
 bool OffscreenRenderer::renderToRgba(const uint8_t *pixels, int width, int height,
-                                     std::vector<uint8_t> *outRgba) {
+                                     float timeSeconds, std::vector<uint8_t> *outRgba) {
     if (!ready_ || pixels == nullptr || width <= 0 || height <= 0) {
         return false;
     }
     bool ok = false;
-    executor_.runSync([this, pixels, width, height, outRgba, &ok] {
+    executor_.runSync([this, pixels, width, height, timeSeconds, outRgba, &ok] {
+        glProgram_.setEffectTime(timeSeconds);
         if (eglMakeCurrent(display_, surface_, surface_, context_) != EGL_TRUE) {
             LOGE("render eglMakeCurrent failed: 0x%04x", eglGetError());
             return;

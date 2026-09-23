@@ -40,7 +40,9 @@ public:
     // is the BOTTOM of the image, i.e. vertically flipped relative to the
     // top-left-origin decoded frame. The consumer (H264Encoder) undoes this flip
     // during RGBA->NV12 conversion, mirroring the camera record path.
-    bool renderToRgba(const uint8_t *pixels, int width, int height,
+    // `timeSeconds` is the frame's presentation time within the segment and becomes
+    // the effect's u_time, so an exported effect animates exactly as it previewed.
+    bool renderToRgba(const uint8_t *pixels, int width, int height, float timeSeconds,
                       std::vector<uint8_t> *outRgba);
 
     int width() const { return width_; }

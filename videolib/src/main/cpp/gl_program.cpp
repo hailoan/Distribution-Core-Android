@@ -210,9 +210,25 @@ vec3 mixColorBlue(vec3 hsl, float hue, float saturation, float lightness) {
 }
 )glsl";
     const char *kPassThroughFilter = "vec4 addFilter(vec4 inputColor,vec2 uv){return inputColor;}\n";
+
+    // Environment for an effect snippet. Unlike a filter, an effect may sample the
+    // frame at coordinates it computes, so it gets getColor(vec2) — the sanctioned
+    // accessor that keeps u_texture itself out of consumer sources — plus u_time,
+    // the frame's playback position in seconds. Out-of-range reads return black
+    // rather than the clamped edge texel, matching the image editor's host shader
+    // (frag_base_shader_image_v3).
+    const char *kEffectComponents = R"glsl(
+uniform float u_time;
+uniform float u_effectOpacity;
+vec4 getColor(vec2 uv){
+ if(uv.x<0.0||uv.x>1.0||uv.y<0.0||uv.y>1.0)return vec4(0.0,0.0,0.0,1.0);
+ return texture(u_texture,uv);
+}
+)glsl";
+    const char *kPassThroughEffect = "vec4 addEffect(vec2 uv){return getColor(uv);}\n";
     const char *kFragmentSuffix = R"glsl(
 void main(){
- vec4 inputColor=texture(u_texture,v_texCoord);vec4 filtered=addFilter(inputColor,v_texCoord);vec4 color=mix(inputColor,filtered,u_filterOpacity);
+ vec4 sampled=texture(u_texture,v_texCoord);vec4 affected=addEffect(v_texCoord);vec4 inputColor=mix(sampled,affected,u_effectOpacity);vec4 filtered=addFilter(inputColor,v_texCoord);vec4 color=mix(inputColor,filtered,u_filterOpacity);
  if(u_brightness!=0.0)color=brightnessAdjust(color,u_brightness);if(u_contrast!=1.0)color=contrastAdjust(color,u_contrast);if(u_saturation!=1.0)color=saturationAdjust(color,u_saturation);if(u_exposure!=0.0)color=exposureAdjust(color,u_exposure);if(u_darks!=1.0)color=darkAdjust(color,u_darks);
  if(any(notEqual(u_levels,vec3(0.0,1.0,1.0))))color.rgb=finalLevels(color.rgb,u_levels);if(u_vignette!=0.0)color=vignetteAdjust(color,u_vignette,v_texCoord);if(u_vibrance!=0.0)color=vibranceAdjust(color,u_vibrance);if(u_temperature!=0.0)color=temperatureAdjust(color,u_temperature);if(u_hue!=0.0)color=hueAdjust(color,u_hue);
  if(u_highlights!=-2.0)color=highlightAdjust(color,u_highlights);if(u_shadows!=0.0)color=shadowAdjust(color,u_shadows);if(u_lights!=1.0)color=lightAdjust(color,u_lights);if(u_clarity!=0.0)color=clarityAdjust(color,u_clarity,v_texCoord);fragColor=color;
@@ -328,12 +344,17 @@ GlProgram::buildGeneration(const AppearanceSnapshot &appearance, Generation *can
             !consumerOwnsSharedFilterComponents(appearance.filter->source)) {
             source << kSharedFilterComponents;
         }
+        // The effect environment declares getColor/u_time and must precede both the
+        // effect snippet that calls them and the pass-through fallback.
+        source << kEffectComponents;
+        source << (appearance.effect ? appearance.effect->source : kPassThroughEffect);
         source << (appearance.filter ? appearance.filter->source : kPassThroughFilter);
         source << kFragmentSuffix;
         AppearanceApplyResult result;
         candidate->program = linkProgram(source.str(), &result);
         if (candidate->program == 0)return result;
         candidate->filter = appearance.filter;
+        candidate->effect = appearance.effect;
         GLint maxSize = 0, maxUnits = 0;
         glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxSize);
         glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxUnits);
@@ -384,6 +405,8 @@ GlProgram::buildGeneration(const AppearanceSnapshot &appearance, Generation *can
         auto &u = candidate->uniforms;
         u.texture = uniform(candidate->program, "u_texture");
         u.filterOpacity = uniform(candidate->program, "u_filterOpacity");
+        u.effectOpacity = uniform(candidate->program, "u_effectOpacity");
+        u.time = uniform(candidate->program, "u_time");
         u.texelSize = uniform(candidate->program, "u_texelSize");
         u.brightness = uniform(candidate->program, "u_brightness");
         u.contrast = uniform(candidate->program, "u_contrast");
@@ -411,7 +434,18 @@ AppearanceApplyResult GlProgram::applyAppearance(const AppearanceSnapshot &appea
     if (!isReady())
         return AppearanceApplyResult::failure(AppearanceError::RenderFailure,
                                               "GL program unavailable");
-    if (generation_.filter == appearance.filter) {
+    // Only the shader text decides whether a relink is needed. u_time is not in the
+    // descriptor at all, and the effect's speed is a plain uniform that changes on
+    // every slider sample, so neither may join the generation key — comparing whole
+    // descriptors here would recompile the program continuously while the user drags.
+    const bool sameEffectProgram =
+            generation_.effect.has_value() == appearance.effect.has_value() &&
+            (!appearance.effect ||
+             (generation_.effect->source == appearance.effect->source &&
+              generation_.effect->version == appearance.effect->version));
+    if (generation_.filter == appearance.filter && sameEffectProgram) {
+        // Adopt the new uniform-only values (opacity, speed) without rebuilding.
+        generation_.effect = appearance.effect;
         adjustments_ = appearance.adjustments;
         return AppearanceApplyResult::success();
     }
@@ -439,6 +473,14 @@ void GlProgram::bindAppearanceUniforms() {
     const auto &u = generation_.uniforms;
     const auto &a = adjustments_;
     glUniform1f(u.filterOpacity, generation_.filter ? generation_.filter->opacity : 0.0f);
+    // Without an effect the pass-through branch must contribute nothing, so the mix
+    // weight is 0 and the time is irrelevant; both are still uploaded so a stale
+    // value from a previous generation can never leak into the draw.
+    glUniform1f(u.effectOpacity, generation_.effect ? generation_.effect->opacity : 0.0f);
+    // Effect clock, scaled by the descriptor's speed: below 1 the animation lags
+    // the video, 0 freezes it on the opening pose.
+    glUniform1f(u.time,
+                generation_.effect ? effectTime_ * generation_.effect->speed : 0.0f);
     glUniform2f(u.texelSize, texWidth_ > 0 ? 1.0f / texWidth_ : 0.0f,
                 texHeight_ > 0 ? 1.0f / texHeight_ : 0.0f);
     glUniform1f(u.brightness, a.brightness);

@@ -869,7 +869,12 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
                     }
                 }
                 if (mayPresent) {
-                    presented = renderer_.pushFrame(rgba.data(), width, height);
+                    // Effect clock: media time within the kept interval, so the effect
+                    // animates with playback and a seek lands on the same phase every
+                    // time. mediaUs is already segment-relative.
+                    presented = renderer_.pushFrame(
+                            rgba.data(), width, height,
+                            static_cast<float>(static_cast<double>(mediaUs) / 1e6));
                 }
             }
             if (seekSuperseded) {

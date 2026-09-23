@@ -154,7 +154,8 @@ AppearanceApplyResult PreviewRenderer::applyAppearance(
     return result;
 }
 
-bool PreviewRenderer::pushFrame(const uint8_t *pixels, int width, int height) {
+bool PreviewRenderer::pushFrame(const uint8_t *pixels, int width, int height,
+                                float timeSeconds) {
     if (state_ != State::Ready && state_ != State::Rendering) {
         return false;
     }
@@ -162,7 +163,8 @@ bool PreviewRenderer::pushFrame(const uint8_t *pixels, int width, int height) {
         return false; // invalid frame: ignore, keep last good state (AC-1)
     }
     bool presented = false;
-    executor_.runSync([this, pixels, width, height, &presented] {
+    executor_.runSync([this, pixels, width, height, timeSeconds, &presented] {
+        glProgram_.setEffectTime(timeSeconds);
         if (eglMakeCurrent(display_, surface_, surface_, context_) != EGL_TRUE) {
             LOGE("pushFrame eglMakeCurrent failed: 0x%04x", eglGetError());
             return;

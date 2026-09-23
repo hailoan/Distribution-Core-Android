@@ -158,6 +158,45 @@ namespace {
         return object;
     }
 
+    // Reads the optional effect leg of an appearance. Version 0 means "no effect",
+    // in which case the source must be absent; any other version requires a source.
+    AppearanceApplyResult readEffect(
+            JNIEnv *env,
+            jint effectVersion,
+            jstring effectSource,
+            jfloat effectOpacity,
+            jfloat effectSpeed,
+            AppearanceSnapshot *appearance) {
+        if (effectVersion == 0) {
+            if (effectSource != nullptr) {
+                return AppearanceApplyResult::failure(AppearanceError::InvalidEffectSource);
+            }
+            appearance->effect.reset();
+            return AppearanceApplyResult::success();
+        }
+        if (effectSource == nullptr) {
+            return AppearanceApplyResult::failure(AppearanceError::InvalidEffectSource);
+        }
+        const char *sourceChars = env->GetStringUTFChars(effectSource, nullptr);
+        if (sourceChars == nullptr) {
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            return AppearanceApplyResult::failure(AppearanceError::ResourceAllocation);
+        }
+        EffectDescriptor effect;
+        try {
+            effect.version = effectVersion;
+            effect.source.assign(sourceChars);
+            effect.opacity = effectOpacity;
+            effect.speed = effectSpeed;
+        } catch (...) {
+            env->ReleaseStringUTFChars(effectSource, sourceChars);
+            return AppearanceApplyResult::failure(AppearanceError::ResourceAllocation);
+        }
+        env->ReleaseStringUTFChars(effectSource, sourceChars);
+        appearance->effect = std::move(effect);
+        return AppearanceApplyResult::success();
+    }
+
     AppearanceApplyResult readAppearance(
             JNIEnv *env,
             jfloatArray adjustmentValues,
@@ -167,6 +206,10 @@ namespace {
             jintArray textureWidths,
             jintArray textureHeights,
             jobjectArray textureBytes,
+            jint effectVersion,
+            jstring effectSource,
+            jfloat effectOpacity,
+            jfloat effectSpeed,
             AppearanceSnapshot *appearance) {
         if (adjustmentValues == nullptr || env->GetArrayLength(adjustmentValues) != 16) {
             return AppearanceApplyResult::failure(AppearanceError::InvalidValue);
@@ -182,6 +225,10 @@ namespace {
                 values[6], values[7], values[8], values[9], values[10], values[11],
                 values[12], values[13], values[14], values[15],
         };
+        // Read before the filter legs below, both of which return early.
+        const AppearanceApplyResult effectResult = readEffect(
+                env, effectVersion, effectSource, effectOpacity, effectSpeed, appearance);
+        if (!effectResult.accepted()) return effectResult;
         if (filterVersion == 0) {
             if (filterSource != nullptr ||
                 (textureWidths != nullptr && env->GetArrayLength(textureWidths) != 0) ||
@@ -293,12 +340,18 @@ namespace {
             jobjectArray textureWidths,
             jobjectArray textureHeights,
             jobjectArray textureBytes,
+            jintArray effectVersions,
+            jobjectArray effectSources,
+            jfloatArray effectOpacities,
+            jfloatArray effectSpeeds,
             std::vector<TimelineSegment> *segments) {
         if (paths == nullptr || startsMs == nullptr || endsMs == nullptr ||
             speeds == nullptr || adjustments == nullptr || filterVersions == nullptr ||
             filterSources == nullptr || filterOpacities == nullptr ||
             textureWidths == nullptr || textureHeights == nullptr ||
-            textureBytes == nullptr) {
+            textureBytes == nullptr || effectVersions == nullptr ||
+            effectSources == nullptr || effectOpacities == nullptr ||
+            effectOpacities == nullptr || effectSpeeds == nullptr) {
             return false;
         }
         const jsize count = env->GetArrayLength(paths);
@@ -312,7 +365,11 @@ namespace {
             env->GetArrayLength(filterOpacities) != count ||
             env->GetArrayLength(textureWidths) != count ||
             env->GetArrayLength(textureHeights) != count ||
-            env->GetArrayLength(textureBytes) != count) {
+            env->GetArrayLength(textureBytes) != count ||
+            env->GetArrayLength(effectVersions) != count ||
+            env->GetArrayLength(effectSources) != count ||
+            env->GetArrayLength(effectOpacities) != count ||
+            env->GetArrayLength(effectSpeeds) != count) {
             return false;
         }
 
@@ -321,12 +378,18 @@ namespace {
         std::vector<jdouble> segmentSpeeds;
         std::vector<jint> versions;
         std::vector<jfloat> opacities;
+        std::vector<jint> effectVersionValues;
+        std::vector<jfloat> effectOpacityValues;
+        std::vector<jfloat> effectSpeedValues;
         try {
             starts.resize(static_cast<size_t>(count));
             ends.resize(static_cast<size_t>(count));
             segmentSpeeds.resize(static_cast<size_t>(count));
             versions.resize(static_cast<size_t>(count));
             opacities.resize(static_cast<size_t>(count));
+            effectVersionValues.resize(static_cast<size_t>(count));
+            effectOpacityValues.resize(static_cast<size_t>(count));
+            effectSpeedValues.resize(static_cast<size_t>(count));
             segments->reserve(static_cast<size_t>(count));
         } catch (...) {
             return false;
@@ -336,6 +399,9 @@ namespace {
         env->GetDoubleArrayRegion(speeds, 0, count, segmentSpeeds.data());
         env->GetIntArrayRegion(filterVersions, 0, count, versions.data());
         env->GetFloatArrayRegion(filterOpacities, 0, count, opacities.data());
+        env->GetIntArrayRegion(effectVersions, 0, count, effectVersionValues.data());
+        env->GetFloatArrayRegion(effectOpacities, 0, count, effectOpacityValues.data());
+        env->GetFloatArrayRegion(effectSpeeds, 0, count, effectSpeedValues.data());
         if (env->ExceptionCheck()) {
             env->ExceptionClear();
             return false;
@@ -350,6 +416,8 @@ namespace {
             auto widths = static_cast<jintArray>(env->GetObjectArrayElement(textureWidths, i));
             auto heights = static_cast<jintArray>(env->GetObjectArrayElement(textureHeights, i));
             auto bytes = static_cast<jobjectArray>(env->GetObjectArrayElement(textureBytes, i));
+            auto effectSource =
+                    static_cast<jstring>(env->GetObjectArrayElement(effectSources, i));
 
             bool ok = pathString != nullptr && adjustmentValues != nullptr;
             TimelineSegment segment;
@@ -371,7 +439,10 @@ namespace {
                 AppearanceApplyResult conversion = readAppearance(
                         env, adjustmentValues, versions[static_cast<size_t>(i)],
                         filterSource, opacities[static_cast<size_t>(i)],
-                        widths, heights, bytes, &segment.appearance);
+                        widths, heights, bytes,
+                        effectVersionValues[static_cast<size_t>(i)], effectSource,
+                        effectOpacityValues[static_cast<size_t>(i)],
+                        effectSpeedValues[static_cast<size_t>(i)], &segment.appearance);
                 ok = conversion.accepted();
             }
             if (ok) {
@@ -391,6 +462,7 @@ namespace {
             if (widths != nullptr) env->DeleteLocalRef(widths);
             if (heights != nullptr) env->DeleteLocalRef(heights);
             if (bytes != nullptr) env->DeleteLocalRef(bytes);
+            if (effectSource != nullptr) env->DeleteLocalRef(effectSource);
             if (!ok) {
                 if (env->ExceptionCheck()) env->ExceptionClear();
                 return false;
@@ -513,7 +585,11 @@ Java_com_cii_videolib_VideoPreview_nativePlayTimeline(
         jfloatArray filterOpacities,
         jobjectArray textureWidths,
         jobjectArray textureHeights,
-        jobjectArray textureBytes) {
+        jobjectArray textureBytes,
+        jintArray effectVersions,
+        jobjectArray effectSources,
+        jfloatArray effectOpacities,
+        jfloatArray effectSpeeds) {
     VideoPlayback *playback = asPlayback(handle);
     if (playback == nullptr) {
         return 0;
@@ -522,7 +598,8 @@ Java_com_cii_videolib_VideoPreview_nativePlayTimeline(
     if (!readTimelineSegments(
             env, paths, startsMs, endsMs, speeds, adjustments, filterVersions,
             filterSources, filterOpacities, textureWidths, textureHeights,
-            textureBytes, &segments)) {
+            textureBytes, effectVersions, effectSources, effectOpacities,
+            effectSpeeds, &segments)) {
         return 0;
     }
     return static_cast<jlong>(playback->playTimeline(std::move(segments)));
@@ -589,7 +666,11 @@ Java_com_cii_videolib_VideoPreview_nativeApplyAppearance(
         jfloat filterOpacity,
         jintArray textureWidths,
         jintArray textureHeights,
-        jobjectArray textureBytes) {
+        jobjectArray textureBytes,
+        jint effectVersion,
+        jstring effectSource,
+        jfloat effectOpacity,
+        jfloat effectSpeed) {
     VideoPlayback *playback = asPlayback(handle);
     if (playback == nullptr) {
         return newAppearanceResult(
@@ -598,7 +679,8 @@ Java_com_cii_videolib_VideoPreview_nativeApplyAppearance(
     AppearanceSnapshot appearance;
     AppearanceApplyResult conversion = readAppearance(
             env, adjustments, filterVersion, filterSource, filterOpacity,
-            textureWidths, textureHeights, textureBytes, &appearance);
+            textureWidths, textureHeights, textureBytes,
+            effectVersion, effectSource, effectOpacity, effectSpeed, &appearance);
     if (!conversion.accepted()) return newAppearanceResult(env, conversion);
     return newAppearanceResult(env, playback->applyAppearance(appearance));
 }
@@ -772,12 +854,18 @@ namespace {
             jobjectArray textureWidths,
             jobjectArray textureHeights,
             jobjectArray textureBytes,
+            jintArray effectVersions,
+            jobjectArray effectSources,
+            jfloatArray effectOpacities,
+            jfloatArray effectSpeeds,
             ExportRequest *request) {
         if (outputPath == nullptr || paths == nullptr || startsMs == nullptr ||
             endsMs == nullptr || speeds == nullptr || adjustments == nullptr ||
             filterVersions == nullptr || filterSources == nullptr ||
             filterOpacities == nullptr || textureWidths == nullptr ||
-            textureHeights == nullptr || textureBytes == nullptr) {
+            textureHeights == nullptr || textureBytes == nullptr ||
+            effectVersions == nullptr || effectSources == nullptr ||
+            effectOpacities == nullptr || effectSpeeds == nullptr) {
             return false;
         }
         const char *outChars = env->GetStringUTFChars(outputPath, nullptr);
@@ -805,7 +893,11 @@ namespace {
             env->GetArrayLength(filterOpacities) != count ||
             env->GetArrayLength(textureWidths) != count ||
             env->GetArrayLength(textureHeights) != count ||
-            env->GetArrayLength(textureBytes) != count) {
+            env->GetArrayLength(textureBytes) != count ||
+            env->GetArrayLength(effectVersions) != count ||
+            env->GetArrayLength(effectSources) != count ||
+            env->GetArrayLength(effectOpacities) != count ||
+            env->GetArrayLength(effectSpeeds) != count) {
             return false;
         }
 
@@ -814,12 +906,18 @@ namespace {
         std::vector<jdouble> segmentSpeeds;
         std::vector<jint> versions;
         std::vector<jfloat> opacities;
+        std::vector<jint> effectVersionValues;
+        std::vector<jfloat> effectOpacityValues;
+        std::vector<jfloat> effectSpeedValues;
         try {
             starts.resize(static_cast<size_t>(count));
             ends.resize(static_cast<size_t>(count));
             segmentSpeeds.resize(static_cast<size_t>(count));
             versions.resize(static_cast<size_t>(count));
             opacities.resize(static_cast<size_t>(count));
+            effectVersionValues.resize(static_cast<size_t>(count));
+            effectOpacityValues.resize(static_cast<size_t>(count));
+            effectSpeedValues.resize(static_cast<size_t>(count));
             request->segments.reserve(static_cast<size_t>(count));
         } catch (...) {
             return false;
@@ -829,6 +927,9 @@ namespace {
         env->GetDoubleArrayRegion(speeds, 0, count, segmentSpeeds.data());
         env->GetIntArrayRegion(filterVersions, 0, count, versions.data());
         env->GetFloatArrayRegion(filterOpacities, 0, count, opacities.data());
+        env->GetIntArrayRegion(effectVersions, 0, count, effectVersionValues.data());
+        env->GetFloatArrayRegion(effectOpacities, 0, count, effectOpacityValues.data());
+        env->GetFloatArrayRegion(effectSpeeds, 0, count, effectSpeedValues.data());
         if (env->ExceptionCheck()) {
             env->ExceptionClear();
             return false;
@@ -843,6 +944,8 @@ namespace {
             auto widths = static_cast<jintArray>(env->GetObjectArrayElement(textureWidths, i));
             auto heights = static_cast<jintArray>(env->GetObjectArrayElement(textureHeights, i));
             auto bytes = static_cast<jobjectArray>(env->GetObjectArrayElement(textureBytes, i));
+            auto effectSource =
+                    static_cast<jstring>(env->GetObjectArrayElement(effectSources, i));
 
             bool ok = pathString != nullptr && adjustmentValues != nullptr;
             ExportSegment segment;
@@ -864,7 +967,10 @@ namespace {
                 AppearanceApplyResult conversion = readAppearance(
                         env, adjustmentValues, versions[static_cast<size_t>(i)],
                         filterSource, opacities[static_cast<size_t>(i)],
-                        widths, heights, bytes, &segment.appearance);
+                        widths, heights, bytes,
+                        effectVersionValues[static_cast<size_t>(i)], effectSource,
+                        effectOpacityValues[static_cast<size_t>(i)],
+                        effectSpeedValues[static_cast<size_t>(i)], &segment.appearance);
                 ok = conversion.accepted();
             }
             if (ok) {
@@ -884,6 +990,7 @@ namespace {
             if (widths != nullptr) env->DeleteLocalRef(widths);
             if (heights != nullptr) env->DeleteLocalRef(heights);
             if (bytes != nullptr) env->DeleteLocalRef(bytes);
+            if (effectSource != nullptr) env->DeleteLocalRef(effectSource);
             if (!ok) {
                 if (env->ExceptionCheck()) env->ExceptionClear();
                 return false;
@@ -932,7 +1039,11 @@ Java_com_cii_videolib_VideoExporter_nativeStartExport(
         jfloatArray filterOpacities,
         jobjectArray textureWidths,
         jobjectArray textureHeights,
-        jobjectArray textureBytes) {
+        jobjectArray textureBytes,
+        jintArray effectVersions,
+        jobjectArray effectSources,
+        jfloatArray effectOpacities,
+        jfloatArray effectSpeeds) {
     VideoExport *exporter = asExport(handle);
     if (exporter == nullptr) {
         return 0;
@@ -941,7 +1052,8 @@ Java_com_cii_videolib_VideoExporter_nativeStartExport(
     if (!readExportRequest(env, outputPath, includeAudio, paths, startsMs, endsMs,
                            speeds, adjustments, filterVersions, filterSources,
                            filterOpacities, textureWidths, textureHeights,
-                           textureBytes, &request)) {
+                           textureBytes, effectVersions, effectSources,
+                           effectOpacities, effectSpeeds, &request)) {
         return 0;
     }
     return static_cast<jlong>(exporter->start(std::move(request)));

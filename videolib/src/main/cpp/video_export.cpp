@@ -156,11 +156,19 @@ std::optional<ExportErrorCode> VideoExport::exportSegment(
     ExportErrorCode failCode = ExportErrorCode::Decode;
     std::vector<uint8_t> filtered;
 
+    // Frame PTS is timeline-absolute (it carries this segment's base), but the effect
+    // clock must restart per segment so a segment previewed on its own and the same
+    // segment inside a timeline animate identically.
+    const int64_t segmentBasePtsUs = *basePtsUs;
+
     auto err = source.decode(
             segment.startMs, segment.endMs, segment.speed, *basePtsUs,
             [&](const FrameSource::Frame &frame) -> bool {
                 if (isCancelled(attemptId)) return false;
-                if (!renderer.renderToRgba(frame.rgba, frame.width, frame.height, &filtered)) {
+                const auto effectTime = static_cast<float>(
+                        static_cast<double>(frame.ptsUs - segmentBasePtsUs) / 1e6);
+                if (!renderer.renderToRgba(frame.rgba, frame.width, frame.height, effectTime,
+                                           &filtered)) {
                     sinkError = true;
                     failCode = ExportErrorCode::Render;
                     return false;

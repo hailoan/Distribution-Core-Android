@@ -48,9 +48,36 @@ struct FilterDescriptor {
     }
 };
 
+// Animated pre-filter pass. Unlike a filter — which transforms an already
+// sampled color — an effect samples the frame itself through getColor(vec2),
+// so it can displace coordinates (RGB split, scanlines).
+//
+// The shader's u_time is the frame's own presentation time, supplied per draw
+// via GlProgram::setEffectTime, so the effect animates with playback. Deriving
+// it from media time rather than wall time means the same frame always renders
+// identically — a paused redraw is stable and an export matches the preview it
+// came from.
+//
+// `speed` scales that clock: u_time = frameTime * speed. Below 1 the animation
+// runs slower than the video, above 1 faster, and 0 freezes it on the opening
+// pose. It is a plain uniform multiplier, so changing it never relinks the
+// program — which is what lets it be driven from a slider.
+struct EffectDescriptor {
+    int version = 1;
+    std::string source;
+    float opacity = 1.0f;
+    float speed = 1.0f;
+
+    bool operator==(const EffectDescriptor &other) const {
+        return version == other.version && source == other.source &&
+               opacity == other.opacity && speed == other.speed;
+    }
+};
+
 struct AppearanceSnapshot {
     AdjustmentSnapshot adjustments;
     std::optional<FilterDescriptor> filter;
+    std::optional<EffectDescriptor> effect;
 };
 
 enum class AppearanceError : int {
@@ -68,6 +95,10 @@ enum class AppearanceError : int {
     DeviceCapability = 11,
     ResourceAllocation = 12,
     RenderFailure = 13,
+    UnsupportedEffectVersion = 14,
+    InvalidEffectSource = 15,
+    InvalidEffectOpacity = 16,
+    InvalidEffectSpeed = 17,
 };
 
 struct AppearanceApplyResult {

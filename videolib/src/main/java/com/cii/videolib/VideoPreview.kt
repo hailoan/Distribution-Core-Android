@@ -147,6 +147,16 @@ class VideoPreview {
                 segments[it].appearance.filter?.textures?.map { texture -> texture.copyRgba8888() }
                     ?.toTypedArray() ?: emptyArray()
             },
+            effectVersions = IntArray(segments.size) {
+                segments[it].appearance.effect?.version ?: NO_EFFECT_VERSION
+            },
+            effectSources = Array(segments.size) { segments[it].appearance.effect?.source },
+            effectOpacities = FloatArray(segments.size) {
+                segments[it].appearance.effect?.opacity ?: 1f
+            },
+            effectSpeeds = FloatArray(segments.size) {
+                segments[it].appearance.effect?.speed ?: 1f
+            },
         )
         val pendingEvent: NativePlaybackEvent?
         synchronized(callbackLock) {
@@ -215,8 +225,17 @@ class VideoPreview {
         ) {
             return rejected(AppearanceRejectionReason.SURFACE_UNAVAILABLE)
         }
+        // Mirrors the filter guard above: applying a new effect relinks the program, which needs a
+        // surface.
+        if (appearance.effect != null &&
+            appearance.effect != this.appearance.effect &&
+            !surfaceAttached
+        ) {
+            return rejected(AppearanceRejectionReason.SURFACE_UNAVAILABLE)
+        }
 
         val filter = appearance.filter
+        val effect = appearance.effect
         val nativeResult = nativeApplyAppearance(
             handle = handle,
             adjustments = appearance.adjustments.toNativeArray(),
@@ -227,6 +246,10 @@ class VideoPreview {
             textureHeights = filter?.textures?.map { it.height }?.toIntArray() ?: IntArray(0),
             textureBytes = filter?.textures?.map { it.copyRgba8888() }?.toTypedArray()
                 ?: emptyArray(),
+            effectVersion = effect?.version ?: NO_EFFECT_VERSION,
+            effectSource = effect?.source,
+            effectOpacity = effect?.opacity ?: 1f,
+            effectSpeed = effect?.speed ?: 1f,
         )
         return nativeResult.toPublicResult().also { result ->
             if (result === AppearanceUpdateResult.Accepted) {
@@ -237,6 +260,10 @@ class VideoPreview {
 
     fun setAdjustments(adjustments: VideoAdjustments): AppearanceUpdateResult =
         setAppearance(appearance.copy(adjustments = adjustments))
+
+    /** Replaces the effect pass; `null` removes it. */
+    fun setEffect(effect: VideoEffect?): AppearanceUpdateResult =
+        setAppearance(appearance.copy(effect = effect))
 
     fun resetAdjustments(): AppearanceUpdateResult = setAdjustments(VideoAdjustments())
 
@@ -450,6 +477,8 @@ class VideoPreview {
             return rejected(AppearanceRejectionReason.INVALID_LEVELS)
         }
 
+        validateEffect(candidate.effect)?.let { return it }
+
         val filter = candidate.filter ?: return null
         if (filter.version != VideoFilter.VERSION_1) {
             return rejected(AppearanceRejectionReason.UNSUPPORTED_FILTER_VERSION)
@@ -469,6 +498,27 @@ class VideoPreview {
             }
         ) {
             return rejected(AppearanceRejectionReason.INVALID_FILTER_TEXTURE)
+        }
+        return null
+    }
+
+    /** Structural checks for the optional effect leg, mirroring the filter rules. */
+    private fun validateEffect(effect: VideoEffect?): AppearanceUpdateResult.Rejected? {
+        if (effect == null) return null
+        if (effect.version != VideoEffect.VERSION_1) {
+            return rejected(AppearanceRejectionReason.UNSUPPORTED_EFFECT_VERSION)
+        }
+        if (!effect.opacity.isFinite() || effect.opacity !in 0f..1f) {
+            return rejected(AppearanceRejectionReason.INVALID_EFFECT_OPACITY)
+        }
+        // A non-finite or negative speed would poison every u_time-derived term.
+        if (!effect.speed.isFinite() || effect.speed < 0f) {
+            return rejected(AppearanceRejectionReason.INVALID_EFFECT_SPEED)
+        }
+        if (!EFFECT_ENTRY_POINT.containsMatchIn(effect.source) ||
+            RESERVED_FILTER_SOURCE.any { effect.source.contains(it) }
+        ) {
+            return rejected(AppearanceRejectionReason.INVALID_EFFECT_SOURCE)
         }
         return null
     }
@@ -518,6 +568,10 @@ class VideoPreview {
         textureWidths: Array<IntArray>,
         textureHeights: Array<IntArray>,
         textureBytes: Array<Array<ByteArray>>,
+        effectVersions: IntArray,
+        effectSources: Array<String?>,
+        effectOpacities: FloatArray,
+        effectSpeeds: FloatArray,
     ): Long
     private external fun nativeStop(handle: Long)
     private external fun nativePause(handle: Long): Boolean
@@ -534,6 +588,10 @@ class VideoPreview {
         textureWidths: IntArray,
         textureHeights: IntArray,
         textureBytes: Array<ByteArray>,
+        effectVersion: Int,
+        effectSource: String?,
+        effectOpacity: Float,
+        effectSpeed: Float,
     ): NativeAppearanceResult
     private external fun nativePushFrame(handle: Long, frame: ByteBuffer, width: Int, height: Int)
     private external fun nativeRepresent(handle: Long): Boolean
@@ -549,9 +607,13 @@ class VideoPreview {
         private const val NATIVE_ERROR_RENDER = 4
         private const val NATIVE_APPEARANCE_ACCEPTED = 0
         private const val NO_FILTER_VERSION = 0
+        private const val NO_EFFECT_VERSION = 0
         private const val RGBA_CHANNELS = 4L
         private val FILTER_ENTRY_POINT = Regex(
             """\bvec4\s+addFilter\s*\(\s*vec4\s+\w+\s*,\s*vec2\s+\w+\s*\)""",
+        )
+        private val EFFECT_ENTRY_POINT = Regex(
+            """\bvec4\s+addEffect\s*\(\s*vec2\s+\w+\s*\)""",
         )
         private val RESERVED_FILTER_SOURCE = listOf(
             "#version",

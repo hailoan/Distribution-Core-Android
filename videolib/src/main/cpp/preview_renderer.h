@@ -50,7 +50,10 @@ public:
     // was presented successfully while Ready/Rendering.
     // `pixels` must remain valid until the call returns (synchronous on render
     // thread); the caller owns the buffer.
-    bool pushFrame(const uint8_t *pixels, int width, int height);
+    // `timeSeconds` is the frame's presentation time within the kept interval and
+    // becomes the effect's u_time; it is retained so representFrame redraws the
+    // same instant. Callers with no meaningful clock pass 0.
+    bool pushFrame(const uint8_t *pixels, int width, int height, float timeSeconds = 0.0f);
 
     // Redraws the retained base frame through the current appearance generation,
     // without uploading new pixels. Lets an appearance accepted while no frame is

@@ -15,6 +15,12 @@ public:
 
     AppearanceApplyResult applyAppearance(const AppearanceSnapshot &appearance);
 
+    // Sets the effect clock, in seconds from the start of the kept interval. This
+    // is what an effect snippet reads as u_time, so it is the caller's frame
+    // timestamp rather than wall time: the same frame always renders identically,
+    // which keeps a paused redraw stable and an export equal to its preview.
+    void setEffectTime(float seconds) { effectTime_ = seconds; }
+
     void drawFrame(const uint8_t *pixels, int width, int height);
 
     void drawTestPattern();
@@ -35,6 +41,7 @@ public:
 private:
     struct UniformLocations {
         GLint texture = -1, filterOpacity = -1, texelSize = -1;
+        GLint effectOpacity = -1, time = -1;
         GLint brightness = -1, contrast = -1, saturation = -1, exposure = -1;
         GLint darks = -1, levels = -1, vignette = -1, vibrance = -1;
         GLint temperature = -1, hue = -1, highlights = -1, shadows = -1;
@@ -46,6 +53,7 @@ private:
         std::vector<GLuint> filterTextures;
         UniformLocations uniforms;
         std::optional<FilterDescriptor> filter;
+        std::optional<EffectDescriptor> effect;
     };
 
     AppearanceApplyResult
@@ -63,6 +71,7 @@ private:
     AdjustmentSnapshot adjustments_;
     GLuint texture_ = 0, vbo_ = 0, ebo_ = 0;
     int texWidth_ = 0, texHeight_ = 0;
+    float effectTime_ = 0.0f;
 };
 
 #endif // VIDEOLIB_GL_PROGRAM_H
