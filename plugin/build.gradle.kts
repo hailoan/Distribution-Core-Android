@@ -24,6 +24,14 @@ repositories {
 publishing {
     repositories {
         mavenLocal() // Enable publishing to ~/.m2/repository
+        maven {
+            name = "core-android"
+            url = uri(System.getenv("GITHUB_PUBLISH"))
+            credentials {
+                username = findProperty("username") as String? ?: System.getenv("GITHUB_USERNAME")
+                password = findProperty("access_token") as String? ?: System.getenv("GITHUB_ACCESS_TOKEN")
+            }
+        }
     }
 }
 
