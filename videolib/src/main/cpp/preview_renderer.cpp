@@ -1,0 +1,300 @@
+//
+// See preview_renderer.h.
+//
+
+#include "preview_renderer.h"
+
+#include <android/log.h>
+#include <algorithm>
+#include <cmath>
+
+#define LOG_TAG "videolib.egl"
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+namespace {
+struct Viewport {
+    GLint x;
+    GLint y;
+    GLsizei width;
+    GLsizei height;
+};
+
+Viewport aspectFitViewport(int frameWidth, int frameHeight,
+                           EGLint surfaceWidth, EGLint surfaceHeight) {
+    const double scale = std::min(
+            static_cast<double>(surfaceWidth) / frameWidth,
+            static_cast<double>(surfaceHeight) / frameHeight);
+    const GLsizei fittedWidth = std::clamp(
+            static_cast<GLsizei>(std::lround(frameWidth * scale)),
+            1, static_cast<GLsizei>(surfaceWidth));
+    const GLsizei fittedHeight = std::clamp(
+            static_cast<GLsizei>(std::lround(frameHeight * scale)),
+            1, static_cast<GLsizei>(surfaceHeight));
+    return {
+            (surfaceWidth - fittedWidth) / 2,
+            (surfaceHeight - fittedHeight) / 2,
+            fittedWidth,
+            fittedHeight,
+    };
+}
+} // namespace
+
+PreviewRenderer::~PreviewRenderer() {
+    // Ensure EGL is torn down and the window released before the executor
+    // (destroyed after this body) drains and joins its worker.
+    releaseSurface();
+}
+
+bool PreviewRenderer::initEglLocked(
+        const AppearanceSnapshot &appearance,
+        AppearanceApplyResult *result) {
+    display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (display_ == EGL_NO_DISPLAY) {
+        LOGE("eglGetDisplay returned EGL_NO_DISPLAY");
+        return false;
+    }
+    if (eglInitialize(display_, nullptr, nullptr) != EGL_TRUE) {
+        LOGE("eglInitialize failed: 0x%04x", eglGetError());
+        return false;
+    }
+
+    const EGLint configAttribs[] = {
+            EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+            EGL_RED_SIZE, 8,
+            EGL_GREEN_SIZE, 8,
+            EGL_BLUE_SIZE, 8,
+            EGL_ALPHA_SIZE, 8,
+            EGL_NONE};
+    EGLConfig config = nullptr;
+    EGLint numConfigs = 0;
+    if (eglChooseConfig(display_, configAttribs, &config, 1, &numConfigs) != EGL_TRUE ||
+        numConfigs < 1) {
+        LOGE("eglChooseConfig failed: 0x%04x", eglGetError());
+        return false;
+    }
+
+    surface_ = eglCreateWindowSurface(display_, config, window_, nullptr);
+    if (surface_ == EGL_NO_SURFACE) {
+        LOGE("eglCreateWindowSurface failed: 0x%04x", eglGetError());
+        return false;
+    }
+
+    const EGLint contextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+    context_ = eglCreateContext(display_, config, EGL_NO_CONTEXT, contextAttribs);
+    if (context_ == EGL_NO_CONTEXT) {
+        LOGE("eglCreateContext failed: 0x%04x", eglGetError());
+        return false;
+    }
+
+    if (eglMakeCurrent(display_, surface_, surface_, context_) != EGL_TRUE) {
+        LOGE("eglMakeCurrent failed: 0x%04x", eglGetError());
+        return false;
+    }
+
+    eglQuerySurface(display_, surface_, EGL_WIDTH, &width_);
+    eglQuerySurface(display_, surface_, EGL_HEIGHT, &height_);
+
+    if (!glProgram_.init(appearance, result)) {
+        LOGE("GL program init failed");
+        return false;
+    }
+
+    glViewport(0, 0, width_, height_);
+    LOGI("EGL initialized (%dx%d)", width_, height_);
+    return true;
+}
+
+bool PreviewRenderer::surfaceAvailable(
+        ANativeWindow *window,
+        const AppearanceSnapshot &appearance) {
+    if (window == nullptr) {
+        LOGE("surfaceAvailable called with null window");
+        return false;
+    }
+    // Re-init on a fresh surface: tear down any prior EGL first (idempotent).
+    if (state_ != State::Idle && state_ != State::Released) {
+        releaseSurface();
+    }
+    window_ = window; // take ownership of the one reference
+
+    bool ok = false;
+    AppearanceApplyResult result;
+    executor_.runSync([this, &appearance, &result, &ok] {
+        ok = initEglLocked(appearance, &result);
+    });
+
+    if (!ok) {
+        state_ = State::Failed;
+        // Release partial EGL/window so a retry starts clean.
+        releaseSurface();
+        state_ = State::Failed;
+        return false;
+    }
+    state_ = State::Ready;
+    return true;
+}
+
+AppearanceApplyResult PreviewRenderer::applyAppearance(
+        const AppearanceSnapshot &appearance) {
+    if (!isSurfaceReady()) {
+        return AppearanceApplyResult::failure(AppearanceError::SurfaceUnavailable);
+    }
+    AppearanceApplyResult result;
+    executor_.runSync([this, &appearance, &result] {
+        if (eglMakeCurrent(display_, surface_, surface_, context_) != EGL_TRUE) {
+            result = AppearanceApplyResult::failure(
+                    AppearanceError::RenderFailure, "eglMakeCurrent failed");
+            return;
+        }
+        while (glGetError() != GL_NO_ERROR) {}
+        result = glProgram_.applyAppearance(appearance);
+    });
+    return result;
+}
+
+bool PreviewRenderer::pushFrame(const uint8_t *pixels, int width, int height,
+                                float timeSeconds) {
+    if (state_ != State::Ready && state_ != State::Rendering) {
+        return false;
+    }
+    if (pixels == nullptr || width <= 0 || height <= 0) {
+        return false; // invalid frame: ignore, keep last good state (AC-1)
+    }
+    bool presented = false;
+    executor_.runSync([this, pixels, width, height, timeSeconds, &presented] {
+        glProgram_.setEffectTime(timeSeconds);
+        if (eglMakeCurrent(display_, surface_, surface_, context_) != EGL_TRUE) {
+            LOGE("pushFrame eglMakeCurrent failed: 0x%04x", eglGetError());
+            return;
+        }
+        while (glGetError() != GL_NO_ERROR) {
+            // Clear any prior GL error so this presentation owns its result.
+        }
+        // Clear the whole surface first, then fit the source frame inside it without
+        // changing the frame aspect ratio. Any letterbox/pillarbox area stays black.
+        glViewport(0, 0, width_, height_);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        const Viewport viewport = aspectFitViewport(width, height, width_, height_);
+        glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
+        glProgram_.drawFrame(pixels, width, height);
+        const GLenum glError = glGetError();
+        if (glError != GL_NO_ERROR) {
+            LOGE("pushFrame GL failed: 0x%04x", glError);
+            return;
+        }
+        if (eglSwapBuffers(display_, surface_) != EGL_TRUE) {
+            LOGE("pushFrame eglSwapBuffers failed: 0x%04x", eglGetError());
+            return;
+        }
+        presented = true;
+    });
+    state_ = presented ? State::Rendering : State::Failed;
+    return presented;
+}
+
+bool PreviewRenderer::representFrame() {
+    if (state_ != State::Ready && state_ != State::Rendering) {
+        return false;
+    }
+    bool presented = false;
+    executor_.runSync([this, &presented] {
+        if (!glProgram_.hasRetainedFrame()) {
+            return; // nothing has been uploaded yet: nothing to redraw
+        }
+        const int width = glProgram_.retainedFrameWidth();
+        const int height = glProgram_.retainedFrameHeight();
+        if (eglMakeCurrent(display_, surface_, surface_, context_) != EGL_TRUE) {
+            LOGE("representFrame eglMakeCurrent failed: 0x%04x", eglGetError());
+            return;
+        }
+        while (glGetError() != GL_NO_ERROR) {
+            // Clear any prior GL error so this presentation owns its result.
+        }
+        // Same presentation geometry as pushFrame, so a redraw is pixel-identical
+        // to the frame it replaces apart from the active appearance generation.
+        glViewport(0, 0, width_, height_);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        const Viewport viewport = aspectFitViewport(width, height, width_, height_);
+        glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
+        // No pixel argument: redraw the retained base texture through the current
+        // generation, so an appearance accepted while paused becomes visible.
+        glProgram_.drawFrame(nullptr, width, height);
+        const GLenum glError = glGetError();
+        if (glError != GL_NO_ERROR) {
+            LOGE("representFrame GL failed: 0x%04x", glError);
+            return;
+        }
+        if (eglSwapBuffers(display_, surface_) != EGL_TRUE) {
+            LOGE("representFrame eglSwapBuffers failed: 0x%04x", eglGetError());
+            return;
+        }
+        presented = true;
+    });
+    // Unlike pushFrame, a failed redraw does not degrade the renderer to Failed:
+    // it presents nothing new, and escalating a cosmetic redraw failure would
+    // block subsequent pushFrame presentation.
+    if (presented) {
+        state_ = State::Rendering;
+    }
+    return presented;
+}
+
+void PreviewRenderer::requestPattern() {
+    if (state_ != State::Ready && state_ != State::Rendering) {
+        return;
+    }
+    executor_.runSync([this] {
+        if (eglMakeCurrent(display_, surface_, surface_, context_) != EGL_TRUE) {
+            LOGE("requestPattern eglMakeCurrent failed: 0x%04x", eglGetError());
+            return;
+        }
+        glViewport(0, 0, width_, height_);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glProgram_.drawTestPattern();
+        eglSwapBuffers(display_, surface_);
+    });
+    state_ = State::Rendering;
+}
+
+void PreviewRenderer::teardownEglLocked() {
+    if (display_ != EGL_NO_DISPLAY) {
+        // Release GL objects while the context is still current.
+        if (context_ != EGL_NO_CONTEXT) {
+            eglMakeCurrent(display_, surface_, surface_, context_);
+            glProgram_.release();
+        }
+        eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (context_ != EGL_NO_CONTEXT) {
+            eglDestroyContext(display_, context_);
+        }
+        if (surface_ != EGL_NO_SURFACE) {
+            eglDestroySurface(display_, surface_);
+        }
+        eglTerminate(display_);
+    }
+    display_ = EGL_NO_DISPLAY;
+    surface_ = EGL_NO_SURFACE;
+    context_ = EGL_NO_CONTEXT;
+    width_ = 0;
+    height_ = 0;
+}
+
+void PreviewRenderer::releaseSurface() {
+    // Idempotent: nothing to do if never initialized / already released.
+    if (state_ == State::Released &&
+        display_ == EGL_NO_DISPLAY && window_ == nullptr) {
+        return;
+    }
+    executor_.runSync([this] { teardownEglLocked(); });
+
+    if (window_ != nullptr) {
+        ANativeWindow_release(window_); // the single release of the one ref
+        window_ = nullptr;
+    }
+    state_ = State::Released;
+}

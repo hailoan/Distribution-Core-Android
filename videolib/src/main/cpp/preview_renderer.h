@@ -1,0 +1,95 @@
+//
+// EGL/GLES 3.0 preview renderer for videolib.
+//
+// Owns the EGL display/surface/context, the GL draw program, and the renderer
+// lifecycle state. All GL/EGL work is marshalled onto a single RenderThreadExecutor
+// so the context is created on and current only on that thread (opengles-guideline,
+// ndk-cpp-guideline). Frame content is host-supplied RGBA8888 or a built-in test
+// pattern — no video/camera/FFmpeg dependency (SOLUTION-DESIGN D-2, AC-6).
+//
+// State model (SOLUTION-DESIGN §2):
+//   Idle -> Ready -> Rendering -> Released/Failed, with idempotent teardown.
+//
+
+#ifndef VIDEOLIB_PREVIEW_RENDERER_H
+#define VIDEOLIB_PREVIEW_RENDERER_H
+
+#include <EGL/egl.h>
+#include <android/native_window.h>
+#include <cstdint>
+#include <memory>
+
+#include "gl_program.h"
+#include "appearance.h"
+#include "render_thread_executor.h"
+
+class PreviewRenderer {
+public:
+    enum class State {
+        Idle, Ready, Rendering, Released, Failed
+    };
+
+    PreviewRenderer() = default;
+
+    ~PreviewRenderer();
+
+    PreviewRenderer(const PreviewRenderer &) = delete;
+
+    PreviewRenderer &operator=(const PreviewRenderer &) = delete;
+
+    // Takes ownership of `window` (one ANativeWindow reference, released once in
+    // releaseSurface). Initializes EGL + GL program on the render thread.
+    // Returns false if the window is null or EGL/GL init fails (-> Failed).
+    bool surfaceAvailable(ANativeWindow *window, const AppearanceSnapshot &appearance);
+
+    // Synchronously applies a complete appearance while the EGL context is
+    // current. Candidate failures leave the prior generation active.
+    AppearanceApplyResult applyAppearance(const AppearanceSnapshot &appearance);
+
+    // Uploads and draws a host RGBA8888 frame. Returns false unless the frame
+    // was presented successfully while Ready/Rendering.
+    // `pixels` must remain valid until the call returns (synchronous on render
+    // thread); the caller owns the buffer.
+    // `timeSeconds` is the frame's presentation time within the kept interval and
+    // becomes the effect's u_time; it is retained so representFrame redraws the
+    // same instant. Callers with no meaningful clock pass 0.
+    bool pushFrame(const uint8_t *pixels, int width, int height, float timeSeconds = 0.0f);
+
+    // Redraws the retained base frame through the current appearance generation,
+    // without uploading new pixels. Lets an appearance accepted while no frame is
+    // scheduled become visible. Returns false (no-op) unless Ready/Rendering and a
+    // frame has already been uploaded. Presentation-only: never mutates appearance.
+    bool representFrame();
+
+    // Draws the built-in test pattern. Ignored unless Ready/Rendering.
+    void requestPattern();
+
+    // Ordered EGL teardown + single ANativeWindow release. Idempotent.
+    void releaseSurface();
+
+    State state() const { return state_; }
+
+    bool isSurfaceReady() const {
+        return state_ == State::Ready || state_ == State::Rendering;
+    }
+
+private:
+    bool initEglLocked(const AppearanceSnapshot &appearance,
+                       AppearanceApplyResult *result);
+
+    void teardownEglLocked();   // render-thread body of releaseSurface
+
+    RenderThreadExecutor executor_{"videolib_render"};
+    GlProgram glProgram_;
+
+    ANativeWindow *window_ = nullptr;
+    EGLDisplay display_ = EGL_NO_DISPLAY;
+    EGLSurface surface_ = EGL_NO_SURFACE;
+    EGLContext context_ = EGL_NO_CONTEXT;
+    EGLint width_ = 0;
+    EGLint height_ = 0;
+
+    State state_ = State::Idle;
+};
+
+#endif // VIDEOLIB_PREVIEW_RENDERER_H

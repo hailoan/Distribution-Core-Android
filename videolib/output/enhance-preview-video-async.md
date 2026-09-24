@@ -1,0 +1,3 @@
+- Only update code into module `:videolib`
+- Now: using ffmpeg to decode and get AVFrame to preview on opengles.
+- Enhance: Async thread decode and preview to improve UX when play video (don't waiting for)

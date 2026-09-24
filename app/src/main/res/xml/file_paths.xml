@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Exported videos are written under cacheDir/exports; expose that subtree
+         so the demo can hand a content:// URI to an external player. -->
+    <cache-path
+        name="exports"
+        path="exports/" />
+</paths>

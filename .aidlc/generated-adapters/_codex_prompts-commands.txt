@@ -1,0 +1,13 @@
+aidlc-review.md
+autotest.md
+design.md
+discover.md
+fixbug.md
+implement.md
+it.md
+qa-plan.md
+qa.md
+study.md
+task.md
+ut.md
+vibe.md
