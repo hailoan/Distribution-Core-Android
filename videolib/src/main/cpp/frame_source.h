@@ -49,6 +49,8 @@ public:
     // success, or the appropriate error otherwise.
     std::optional<ExportErrorCode> open(const std::string &path);
 
+    // Upright (display-oriented) frame size: the stored size with its axes
+    // swapped when the stream's display matrix rotates by 90/270 degrees.
     int width() const { return width_; }
 
     int height() const { return height_; }
@@ -85,6 +87,8 @@ private:
     AVFrame *frame_ = nullptr;
     SwsContext *sws_ = nullptr;
     std::vector<uint8_t> rgba_;
+    std::vector<uint8_t> rotated_;
+    int rotationDegrees_ = 0; // clockwise, see frame_rotation.h
 
     int videoStreamIndex_ = -1;
     int width_ = 0;

@@ -1,5 +1,7 @@
 #include "video_playback.h"
 
+#include "frame_rotation.h"
+
 #include <android/log.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -669,6 +671,10 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
     double appliedSpeed = 1.0;
     std::chrono::steady_clock::time_point clockAnchorWall;
     std::vector<uint8_t> rgba;
+    // Display orientation (clockwise degrees) of this file; frames are rotated
+    // upright before presentation so a portrait gallery clip previews portrait.
+    const int rotationDegrees = frame_rotation::clockwiseDegrees(stream);
+    std::vector<uint8_t> rotated;
 
     enum class ScheduleResult {
         Present, Drop, Seek, Cancelled
@@ -850,6 +856,16 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
                           0, height, destinationData, destinationLinesize) <= 0) {
                 return DecodeFlow::DecodeError;
             }
+            const uint8_t *framePixels = rgba.data();
+            int frameWidth = width;
+            int frameHeight = height;
+            if (rotationDegrees != 0) {
+                frame_rotation::rotateRgba(rgba.data(), width, height, rotationDegrees, &rotated);
+                framePixels = rotated.data();
+                if (frame_rotation::swapsAxes(rotationDegrees)) {
+                    std::swap(frameWidth, frameHeight);
+                }
+            }
 
             bool mayPresent = false;
             bool seekSuperseded = false;
@@ -873,7 +889,7 @@ std::optional<PlaybackErrorCode> VideoPlayback::decodeAttempt(
                     // animates with playback and a seek lands on the same phase every
                     // time. mediaUs is already segment-relative.
                     presented = renderer_.pushFrame(
-                            rgba.data(), width, height,
+                            framePixels, frameWidth, frameHeight,
                             static_cast<float>(static_cast<double>(mediaUs) / 1e6));
                 }
             }

@@ -1,5 +1,7 @@
 #include "frame_source.h"
 
+#include "frame_rotation.h"
+
 #include <android/log.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -100,6 +102,10 @@ std::optional<ExportErrorCode> FrameSource::open(const std::string &path) {
     if (width_ <= 0 || height_ <= 0) {
         return ExportErrorCode::UnsupportedVideo;
     }
+    rotationDegrees_ = frame_rotation::clockwiseDegrees(stream);
+    if (frame_rotation::swapsAxes(rotationDegrees_)) {
+        std::swap(width_, height_);
+    }
 
     AVRational rate = av_guess_frame_rate(format_, stream, nullptr);
     if (rate.num > 0 && rate.den > 0) {
@@ -144,6 +150,17 @@ std::optional<ExportErrorCode> FrameSource::deliverFrame(
         return ExportErrorCode::Decode;
     }
 
+    // Turn the stored frame upright so export encodes what the gallery shows.
+    if (rotationDegrees_ != 0) {
+        frame_rotation::rotateRgba(rgba_.data(), width, height, rotationDegrees_, &rotated_);
+        const bool swapped = frame_rotation::swapsAxes(rotationDegrees_);
+        Frame out{rotated_.data(), swapped ? height : width, swapped ? width : height,
+                  lastOutputPtsUs_};
+        if (!sink(out)) {
+            *stopped = true;
+        }
+        return std::nullopt;
+    }
     Frame out{rgba_.data(), width, height, lastOutputPtsUs_};
     if (!sink(out)) {
         *stopped = true;
